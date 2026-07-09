@@ -268,3 +268,53 @@ async def test_monitor_failure_deduped_across_cycles(monkeypatch):
     monitor_health = [e for e in events if e.type == "health" and e.stage == "Monitor"]
     assert len(monitor_failures) == 1     # emitted once despite 3 cycles of the same failure
     assert len(monitor_health) == 3      # health still every cycle
+
+import agents.error_resolver as error_resolver_mod
+
+@pytest.mark.asyncio
+async def test_failure_triggers_explanation(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "p", "container": "app",
+                                        "type": "ImagePullBackOff", "message": "no image"}])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "log line")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve",
+                        lambda ctx: {"root_cause": "bad image tag", "plain_explanation": "x",
+                                     "evidence": [], "recommended_action": "fix tag",
+                                     "fix_prompt": "", "auto_remediable": False,
+                                     "suggested_auto_action": "", "severity": "high",
+                                     "suspicious_input_detected": False})
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)
+    async def _no_sleep(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "explanation" in types
+
+@pytest.mark.asyncio
+async def test_explanation_failure_does_not_crash(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "p", "container": "app",
+                                        "type": "ImagePullBackOff", "message": "x"}])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    def _boom(ctx): raise RuntimeError("api down")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve", _boom)
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)
+    async def _no_sleep(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)  # must not raise
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "error" in types  # rollout still times out; no crash

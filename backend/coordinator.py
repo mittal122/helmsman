@@ -3,6 +3,7 @@ from events import Event, EventBus
 from tools import manifests, validate, deploy, monitor
 from approvals import Approvals
 from monitors import Monitors
+from agents import error_resolver
 import guardrails
 
 ROLLOUT_TIMEOUT_S = 120
@@ -22,6 +23,24 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                    message=guardrails.redact(message, variants),
                    data=guardrails.redact(data or {}, variants))
         await bus.publish(ev)
+
+    explained: set = set()
+
+    async def explain(failure):
+        key = (failure.get("pod"), failure.get("type"))
+        if key in explained:
+            return
+        explained.add(key)
+        try:
+            ctx = {"failure_type": failure.get("type", ""),
+                   "pod_status": failure.get("pod", ""),
+                   "recent_events": failure.get("message", ""),
+                   "recent_logs": await asyncio.to_thread(monitor.get_logs, name, ns),
+                   "config_summary": f"{name} image={cfg.get('image','')} replicas={cfg.get('replicas','')}"}
+            result = await asyncio.to_thread(error_resolver.resolve, ctx)
+            await emit("explanation", current, f"Root cause: {result.get('root_cause','')}", result)
+        except Exception as e:
+            await emit("info", current, f"AI explanation unavailable: {e}")
 
     try:
         # Detect capabilities and disable what the cluster can't serve
@@ -81,7 +100,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_enter", "Verify", "Waiting for rollout")
         last = None
         seen_failures: set = set()
-        for _ in range(ROLLOUT_TIMEOUT_S // POLL_INTERVAL_S):
+        for _ in range(ROLLOUT_TIMEOUT_S // max(POLL_INTERVAL_S, 1)):
             ready, desired = await asyncio.to_thread(deploy.get_replicas, name, ns)
             if (ready, desired) != last:
                 await emit("rollout", "Verify", f"{ready}/{desired} ready",
@@ -92,6 +111,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                 if key not in seen_failures:
                     seen_failures.add(key)
                     await emit("failure", "Verify", f"{f['type']} on {f['pod']}", f)
+                    await explain(f)
             if desired and ready >= desired:
                 break
             await asyncio.sleep(POLL_INTERVAL_S)
@@ -118,6 +138,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             for f in failures:
                 if (f["pod"], f["type"]) not in prev_fail_keys:
                     await emit("failure", "Monitor", f"{f['type']} on {f['pod']}", f)
+                    await explain(f)
             prev_fail_keys = {(f["pod"], f["type"]) for f in failures}
             if monitors.is_stopped(name):
                 break
