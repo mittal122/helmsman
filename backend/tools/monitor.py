@@ -36,3 +36,26 @@ def detect_failures(name: str, namespace: str) -> list[dict]:
         return []
     items = json.loads(r.stdout).get("items", [])
     return _failures_from_pods(items)
+
+def get_metrics(name: str, namespace: str) -> list[dict]:
+    r = subprocess.run(
+        ["kubectl", "top", "pods", "-l", f"app.kubernetes.io/name={name}",
+         "-n", namespace, "--no-headers"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return []
+    rows: list[dict] = []
+    for ln in r.stdout.splitlines():
+        parts = ln.split()
+        if len(parts) >= 3:
+            rows.append({"pod": parts[0], "cpu": parts[1], "memory": parts[2]})
+    return rows
+
+def get_logs(name: str, namespace: str, tail: int = 20) -> str:
+    r = subprocess.run(
+        ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",
+         "-n", namespace, "--tail", str(tail), "--all-containers", "--prefix"],
+        capture_output=True, text=True,
+    )
+    return r.stdout if r.returncode == 0 else ""

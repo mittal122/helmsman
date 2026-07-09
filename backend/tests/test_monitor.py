@@ -34,3 +34,21 @@ def test_detect_failures_returns_empty_on_kubectl_error(monkeypatch):
     class _R: returncode = 1; stdout = ""; stderr = "nope"
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
     assert monitor.detect_failures("x", "default") == []
+
+class _Run:
+    def __init__(self, rc, out=""): self.returncode, self.stdout, self.stderr = rc, out, ""
+
+def test_get_metrics_parses_top(monkeypatch):
+    monkeypatch.setattr(subprocess, "run",
+        lambda *a, **k: _Run(0, "demo-abc 5m 40Mi\ndemo-def 3m 38Mi\n"))
+    m = monitor.get_metrics("demo", "default")
+    assert m == [{"pod": "demo-abc", "cpu": "5m", "memory": "40Mi"},
+                 {"pod": "demo-def", "cpu": "3m", "memory": "38Mi"}]
+
+def test_get_metrics_empty_when_unavailable(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Run(1))
+    assert monitor.get_metrics("demo", "default") == []
+
+def test_get_logs_returns_stdout(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Run(0, "line1\nline2"))
+    assert monitor.get_logs("demo", "default") == "line1\nline2"
