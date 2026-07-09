@@ -44,6 +44,9 @@ a decision, update the spec in the same change.
    until Phase 5.
 7. **Stack:** Python + FastAPI backend, TypeScript + React frontend, Postgres
    (event store + state + revisions), SSE for the live stream. See spec §15.
+8. **No LangChain, no LangGraph.** Coordinator = plain Python FSM (enum +
+   transitions dict); LLM calls = Anthropic SDK direct. Rationale in spec §3.2.
+   Reassess LangGraph only if Phase 4 coordinator gains real branching complexity.
 
 ## Invariants — never violate these (they are the design, not preferences)
 

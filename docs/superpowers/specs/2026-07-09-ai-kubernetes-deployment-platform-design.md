@@ -115,6 +115,21 @@ machine that advances through stages. The LLM may *plan within* a stage
 (e.g. which fix to suggest) but never invents the flow. This makes the system
 predictable and testable.
 
+**No LangChain, no LangGraph — plain Python FSM + Anthropic SDK direct.**
+- LangChain: rejected. The 3 LLM calls (onboarding, config-advisor, error-
+  resolution) are single prompt→structured-output calls the Anthropic SDK makes
+  in ~10 lines each with native tool-use. A heavy churny abstraction for what a
+  few lines do (ponytail rung 5).
+- LangGraph: rejected. Our lifecycle is a linear pipeline + monitor loop, not a
+  branching multi-agent graph — an enum + transitions dict (~50 lines) covers it.
+  Its checkpointing/streaming/human-in-loop would overlap the event-bus +
+  Postgres store + SSE we already spec'd (§3.1, §8), giving two competing state
+  systems, and it hides control flow — which fights our #1 value (transparency:
+  we emit a typed event at every transition ourselves).
+- **Reassess trigger:** if the coordinator gains real branching complexity in
+  Phase 4 (dynamic multi-agent routing, parallel fan-out, complex remediation
+  trees), revisit LangGraph then — not before.
+
 ---
 
 ## 4. Deployment lifecycle (stages)
