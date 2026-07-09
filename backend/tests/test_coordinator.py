@@ -248,3 +248,23 @@ async def test_verify_emits_failure_event_during_rollout(monkeypatch):
     while not q.empty():
         types.append((await q.get()).type)
     assert "failure" in types   # surfaced during Verify, not just at timeout
+
+@pytest.mark.asyncio
+async def test_monitor_failure_deduped_across_cycles(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "p", "container": "app",
+                                        "type": "CrashLoopBackOff", "message": "x"}])
+    monkeypatch.setattr(coordinator.monitor, "get_metrics", lambda n, ns: [])
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 3)   # 3 cycles, same failure
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    monitor_failures = [e for e in events if e.type == "failure" and e.stage == "Monitor"]
+    monitor_health = [e for e in events if e.type == "health" and e.stage == "Monitor"]
+    assert len(monitor_failures) == 1     # emitted once despite 3 cycles of the same failure
+    assert len(monitor_health) == 3      # health still every cycle

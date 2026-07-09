@@ -52,6 +52,7 @@ def get_metrics(name: str, namespace: str) -> list[dict]:
             rows.append({"pod": parts[0], "cpu": parts[1], "memory": parts[2]})
     return rows
 
+# ponytail: interface-locked for a later logs UI; not wired into the coordinator yet
 def get_logs(name: str, namespace: str, tail: int = 20) -> str:
     r = subprocess.run(
         ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",

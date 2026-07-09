@@ -109,13 +109,16 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         current = "Monitor"
         await emit("stage_enter", "Monitor", "Monitoring deployment")
         monitors.start(name)   # reset any stale stop flag from a prior run of this name
+        prev_fail_keys: set = set()
         for _ in range(MONITOR_MAX_CYCLES):
             failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             metrics = await asyncio.to_thread(monitor.get_metrics, name, ns)
             await emit("health", "Monitor", "Health snapshot",
                        {"failures": failures, "metrics": metrics})
             for f in failures:
-                await emit("failure", "Monitor", f"{f['type']} on {f['pod']}", f)
+                if (f["pod"], f["type"]) not in prev_fail_keys:
+                    await emit("failure", "Monitor", f"{f['type']} on {f['pod']}", f)
+            prev_fail_keys = {(f["pod"], f["type"]) for f in failures}
             if monitors.is_stopped(name):
                 break
             await asyncio.sleep(MONITOR_INTERVAL_S)
