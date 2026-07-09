@@ -179,6 +179,12 @@ async def test_monitor_stage_emits_health_and_stops(monkeypatch):
                                         "type": "CrashLoopBackOff", "message": "x"}])
     monkeypatch.setattr(coordinator.monitor, "get_metrics",
                         lambda n, ns: [{"pod": "p", "cpu": "5m", "memory": "40Mi"}])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve",
+                        lambda ctx: {"root_cause": "", "plain_explanation": "", "evidence": [],
+                                     "recommended_action": "", "fix_prompt": "", "auto_remediable": False,
+                                     "suggested_auto_action": "", "severity": "low",
+                                     "suspicious_input_detected": False})
     monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe()
@@ -235,6 +241,12 @@ async def test_verify_emits_failure_event_during_rollout(monkeypatch):
     monkeypatch.setattr(coordinator.monitor, "detect_failures",
                         lambda n, ns: [{"pod": "broken-x", "container": "app",
                                         "type": "ImagePullBackOff", "message": "x"}])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve",
+                        lambda ctx: {"root_cause": "", "plain_explanation": "", "evidence": [],
+                                     "recommended_action": "", "fix_prompt": "", "auto_remediable": False,
+                                     "suggested_auto_action": "", "severity": "low",
+                                     "suspicious_input_detected": False})
     monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)  # ~1 loop iteration (POLL_INTERVAL_S default 2)
 
     async def _no_sleep(x):
@@ -256,6 +268,12 @@ async def test_monitor_failure_deduped_across_cycles(monkeypatch):
                         lambda n, ns: [{"pod": "p", "container": "app",
                                         "type": "CrashLoopBackOff", "message": "x"}])
     monkeypatch.setattr(coordinator.monitor, "get_metrics", lambda n, ns: [])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve",
+                        lambda ctx: {"root_cause": "", "plain_explanation": "", "evidence": [],
+                                     "recommended_action": "", "fix_prompt": "", "auto_remediable": False,
+                                     "suggested_auto_action": "", "severity": "low",
+                                     "suspicious_input_detected": False})
     monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 3)   # 3 cycles, same failure
     bus = EventBus(); q = bus.subscribe()
