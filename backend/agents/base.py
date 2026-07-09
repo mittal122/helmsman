@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import anthropic
@@ -34,5 +33,7 @@ def call_agent(prompt_file: str, placeholders: dict, schema: dict) -> dict:
         messages=[{"role": "user", "content": user}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
-    text = next(b.text for b in resp.content if b.type == "text")
+    text = next((b.text for b in resp.content if b.type == "text"), None)
+    if text is None:
+        raise ValueError("Claude response contained no text block")
     return json.loads(text)
