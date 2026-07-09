@@ -9,6 +9,7 @@ from coordinator import run as coordinator_run
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
+_bg_tasks: set = set()
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 class DeployRequest(BaseModel):
@@ -20,7 +21,9 @@ class DeployRequest(BaseModel):
 
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
-    asyncio.create_task(coordinator_run(req.model_dump(), bus))
+    task = asyncio.create_task(coordinator_run(req.model_dump(), bus))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
     return {"deployment_id": req.name}
 
 @app.get("/events")
