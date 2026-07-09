@@ -306,3 +306,96 @@ fixed chart + generated `values.yaml`; rollback/revision via `helm rollback`/
 Remaining:
 1. Whether Phase 2 monitoring is in-scope for the first implementation plan or
    deferred behind Phase 0–1.
+
+---
+
+## 15. Tech foundation
+
+### 15.1 Languages
+
+| Layer | Language | Why |
+|---|---|---|
+| Backend / agents / tools | **Python** | Best Kubernetes client + Claude SDK. The whole brain is Python. |
+| Frontend / dashboard | **TypeScript + React** | Standard for a live dashboard; TS = fewer bugs. |
+| Manifests | **YAML** (via Helm) | k8s speaks YAML; Helm generates it. |
+| Glue / dev scripts | **Bash** | `kind` up, helm, small automation. |
+
+Two languages that matter: Python backend + React frontend. Python does ~90%.
+
+### 15.2 Core machinery
+
+| Tool | Job |
+|---|---|
+| FastAPI | Python web server: API + SSE live stream |
+| kubernetes (Python client) | Talk to cluster (apply, watch, read) |
+| Helm | Render + deploy manifests, rollback/revisions |
+| kubeconform / kube-score | Validate manifests pre-deploy |
+| Anthropic SDK | Call Claude (the 3 LLM agents) |
+| Postgres | Event store + deployment state + revisions |
+| kind | Local k8s cluster for dev |
+| SSE | Push live events to the browser |
+
+### 15.3 Data flow
+
+```
+Browser (React) ──HTTP──▶ FastAPI (Python)
+      ▲                        │
+      │  SSE (live events)     ├─▶ Coordinator (state machine)
+      │                        ├─▶ Tools: Helm, k8s client, validators
+      └────────────────────────┤─▶ Claude (3 LLM agents)
+                               └─▶ Postgres (event store + state)
+                                        │
+                              kind cluster (user's app runs here)
+```
+
+React shows. FastAPI orchestrates. Python tools do the k8s work. Claude
+reasons. Postgres remembers. kind runs the app.
+
+### 15.4 Project structure
+
+```
+k8s-deploy-platform/
+├── backend/                  # Python — the brain
+│   ├── main.py               # FastAPI app + routes + SSE endpoint
+│   ├── coordinator.py        # state machine (the lifecycle)
+│   ├── events.py             # event bus + typed events
+│   ├── db.py                 # Postgres (event store, state, revisions)
+│   ├── tools/                # DETERMINISTIC — no LLM
+│   │   ├── manifests.py      #   render values.yaml → helm
+│   │   ├── validate.py       #   kubeconform + dry-run + kube-score
+│   │   ├── deploy.py         #   k8s client: apply + watch rollout
+│   │   ├── rollback.py       #   helm rollback
+│   │   └── monitor.py        #   prometheus + loki queries
+│   ├── agents/               # LLM — calls Claude
+│   │   ├── onboarding.py      #   containerization-prompt gen
+│   │   ├── config_advisor.py  #   suggest + explain config
+│   │   └── error_resolver.py  #   root-cause + fix-prompt
+│   └── guardrails.py         # redaction, destructive-op gate, circuit breaker
+├── chart/                    # the ONE fixed Helm chart
+│   ├── Chart.yaml
+│   ├── values.yaml           # defaults (best-practice §6)
+│   └── templates/            # deployment, service, ingress, hpa, pdb...
+├── frontend/                 # TypeScript + React — the dashboard
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── EventStream.tsx    # subscribes to SSE, renders everything
+│   │   └── panels/            # stage, manifests, logs, metrics, health
+│   └── package.json
+├── scripts/                  # bash: kind up, seed, dev helpers
+├── docs/superpowers/specs/   # this design doc
+└── docker-compose.yml        # local dev: backend + postgres
+```
+
+**`tools/` vs `agents/` = the architecture as a folder tree.** `tools/` =
+deterministic, touches cluster, no LLM. `agents/` = calls Claude, never touches
+cluster directly. `chart/` is ONE fixed chart; user input becomes `values.yaml`
+at runtime — we never generate charts.
+
+**Phase 0 uses a subset:** `main.py` + `deploy.py` + `validate.py` +
+`manifests.py` + minimal React + chart. `agents/`, `monitor.py`, `rollback.py`,
+`guardrails.py` arrive in later phases. The tree above is the *final* shape.
+
+### 15.5 Prerequisites
+
+`python 3.11+`, `node 18+` (have v24), `docker`, `kind`, `helm`, `kubectl`,
+`postgres` (or via docker-compose).
