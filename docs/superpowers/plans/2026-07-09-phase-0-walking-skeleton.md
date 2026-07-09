@@ -1017,13 +1017,20 @@ Expected: an HTTP/JSON response from the echo server — proves the deployed app
 
 - [ ] **Step 5: Confirm the cluster state**
 
-Run: `kubectl get deploy,pods,svc -l app.kubernetes.io/managed-by=helmsman`
+Run: `kubectl get deploy,pods,svc -l app.kubernetes.io/name=demo`
 Expected: deployment `demo` with 2/2 ready pods and a ClusterIP service.
+Note: filter by `app.kubernetes.io/name`, NOT `managed-by=helmsman` — Helm overrides
+`app.kubernetes.io/managed-by` to `Helm` on install regardless of the chart value. A
+custom, non-colliding label key is a Phase 1/2 fix (needed before monitoring uses label selection).
 
 - [ ] **Step 6: Negative check — validation gate**
 
-Deploy again with an obviously bad image tag (e.g. `image: nginx:@@@bad`) via the UI.
-Expected: pipeline stops at `[Validate]` or surfaces an `error` event; `helm upgrade` is NOT run for a schema failure. (Server-side dry-run catches most issues before any apply.)
+Deploy again with an obviously invalid **port** (e.g. `port: 99999`, out of the valid 1–65535 range) via the UI.
+Expected: pipeline stops at `[Validate]` with an `error` event; `helm upgrade` is NOT run and no
+deployment is created. (Server-side dry-run rejects the out-of-range port before any apply.)
+Note: an invalid *image tag* is NOT caught here — neither kubeconform nor server dry-run pulls the
+image; a bad image surfaces later as ImagePullBackOff → the Verify rollout timeout. Use an invalid
+port (or negative replicas) to exercise the validation gate specifically.
 
 - [ ] **Step 7: Final commit**
 
