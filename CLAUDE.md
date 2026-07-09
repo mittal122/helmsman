@@ -19,14 +19,25 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phases 0, 1, 2 COMPLETE.** All on `main`, pushed to
-  https://github.com/mittal122/helmsman (public). Backend suite 48/48; all three
-  phases verified end-to-end on kind.
-- **Next deliverable = Phase 3 (LLM layer — thin):** onboarding + config-advisor +
-  error-resolution agents (Claude, Anthropic SDK direct — no LangChain/LangGraph),
-  loading `prompts/*.md`; wire config-advisor into Collect, onboarding into
-  Onboard, error-resolution into Remediate; prompt-injection guardrails (§7.2).
-  Plan via `writing-plans`, build via `subagent-driven-development`.
+- **Phases 0, 1, 2, 3 COMPLETE.** All on `main`, pushed to
+  https://github.com/mittal122/helmsman (public). Backend suite 57/57.
+- **Next deliverable = Phase 4 (autonomous mode + rollback):** `tools/rollback.py`
+  (`helm rollback` to last known-good; `helm history` for revisions); autonomous
+  auto-remediation that ACTS on the error-resolution agent's `auto_remediable`/
+  `suggested_auto_action` (currently emitted-only) — behind a circuit breaker
+  (max retries → freeze + escalate); destructive-op gate (delete ns/PVC/CRD stay
+  human-gated even in autonomous). Plan via `writing-plans`, build via
+  `subagent-driven-development`.
+- **Phase 3 delivered:** `agents/base.py` (loads `prompts/_system.md` + agent
+  prompt, fills `{{placeholders}}`, calls Claude `claude-opus-4-8` via Anthropic
+  SDK with structured output); onboarding/config-advisor/error-resolution modules;
+  `/advise-config` + `/onboard` endpoints; coordinator calls error-resolution on
+  first failure → `explanation` event (deduped, try/except fail-safe — LLM failure
+  never crashes a deploy); UI forms + explanation rendering. **LLM output is
+  advisory only — the coordinator never executes `fix_prompt`/`suggested_auto_action`/
+  `auto_remediable` (no execution path = injection-safe by architecture, §7.2).**
+  Real-LLM E2E deferred: needs `ANTHROPIC_API_KEY`/`ant auth login` (absent in the
+  build env); wiring + fail-safe verified, 57 unit tests mock the client.
 - **Phase 2 delivered (lightweight, per updated spec):** metrics-server install
   script; deterministic pod-failure detection (CrashLoopBackOff/ImagePullBackOff/
   ErrImagePull/OOMKilled/Pending) from pod status; metrics via `kubectl top`, logs
