@@ -20,3 +20,16 @@ def test_schema_failure_reported(monkeypatch):
     ok, issues = validate.validate("bad", "default")
     assert ok is False
     assert any("schema" in i for i in issues)
+
+def test_kube_score_critical_blocks(monkeypatch):
+    seq = [_R(0), _R(0), _R(0, out="[CRITICAL] Deployment/x: something bad")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: seq.pop(0))
+    ok, issues = validate.validate("kind: Deployment", "default")
+    assert ok is False
+    assert any("kube-score" in i for i in issues)
+
+def test_kube_score_warnings_pass(monkeypatch):
+    seq = [_R(0), _R(0), _R(0, out="[WARNING] minor")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: seq.pop(0))
+    ok, issues = validate.validate("kind: Deployment", "default")
+    assert ok is True

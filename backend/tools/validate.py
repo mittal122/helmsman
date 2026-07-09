@@ -18,4 +18,12 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
     if dr.returncode != 0:
         issues.append("dry-run: " + dr.stderr.strip())
 
+    ks = subprocess.run(
+        ["kube-score", "score", "--output-format", "ci", "-"],
+        input=manifests, capture_output=True, text=True,
+    )
+    criticals = [ln for ln in ks.stdout.splitlines() if "[CRITICAL]" in ln]
+    if criticals:
+        issues.append("kube-score: " + "; ".join(criticals))
+
     return (len(issues) == 0, issues)
