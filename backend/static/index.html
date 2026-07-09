@@ -23,11 +23,22 @@
     <input name="namespace" placeholder="namespace" value="default">
     <input name="port" placeholder="port" value="8080" type="number">
     <input name="replicas" placeholder="replicas" value="2" type="number">
+    <select name="mode"><option value="manual">Manual</option><option value="autonomous">Autonomous</option></select>
+    <input name="env" placeholder="env KEY=VAL,KEY2=VAL2">
+    <input name="secrets" placeholder="secrets KEY=VAL (redacted)">
     <button type="submit">Deploy</button>
   </form>
+  <div id="approve" style="display:none;margin:10px 0;padding:10px;border:1px solid #2dd4bf;border-radius:8px">
+    <span id="approve-msg"></span>
+    <button id="btn-approve" style="background:#2dd4bf">Approve</button>
+    <button id="btn-reject" style="background:#f87171">Reject</button>
+  </div>
   <div id="log"></div>
 <script>
+  function kv(s){ const o={}; (s||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(p=>{const i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);}); return o; }
+  let currentName = "";
   const log = document.getElementById("log");
+  const approveBar = document.getElementById("approve");
   const es = new EventSource("/events");
   es.onmessage = (m) => {
     const e = JSON.parse(m.data);
@@ -44,17 +55,23 @@
     div.appendChild(document.createTextNode(` [${e.stage}] ${e.message}${extra}`));
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
+    if (e.type === "approval_required") {
+      document.getElementById("approve-msg").textContent = e.message + " ";
+      approveBar.style.display = "block";
+    }
   };
+  document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
+  document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
   document.getElementById("f").onsubmit = async (ev) => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
-    await fetch("/deploy", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+    currentName = fd.get("name");
+    await fetch("/deploy", { method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         name: fd.get("name"), image: fd.get("image"), namespace: fd.get("namespace"),
         port: Number(fd.get("port")), replicas: Number(fd.get("replicas")),
-      }),
-    });
+        mode: fd.get("mode"), env: kv(fd.get("env")), secrets: kv(fd.get("secrets")),
+      })});
   };
 </script>
 </body>
