@@ -22,6 +22,11 @@ def test_rejects_non_rfc1123_name():
     r = client.post("/deploy", json={"name": "--evil", "image": "i:1"})
     assert r.status_code == 422
 
+def test_rejects_trailing_newline_name():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app\n", "image": "i:1"})
+    assert r.status_code == 422
+
 def test_approve_resolves(monkeypatch):
     called = {}
     monkeypatch.setattr(main.approvals, "resolve",

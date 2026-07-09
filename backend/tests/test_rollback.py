@@ -7,7 +7,7 @@ def test_flag_injection_rejected(monkeypatch):
     # a leading-dash name/namespace must never reach helm as a flag
     called = []
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: called.append(a))
-    for bad in ("--set", "-x", "a/b", "UPPER"):
+    for bad in ("--set", "-x", "a/b", "UPPER", "prod\n"):
         with pytest.raises(ValueError):
             rollback.do_rollback(bad, "default", 1)
         with pytest.raises(ValueError):

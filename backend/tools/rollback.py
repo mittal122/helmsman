@@ -3,7 +3,7 @@ import re
 import subprocess
 
 _GOOD = {"deployed", "superseded"}
-_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\Z")
 
 def _check(name: str, namespace: str) -> None:
     # argv-flag-injection guard: a leading-dash name/namespace would be read as a helm

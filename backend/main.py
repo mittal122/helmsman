@@ -22,7 +22,7 @@ breakers = Breaker()
 _bg_tasks: set = set()
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
-_RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?\Z")
 
 def _dns1123(v: str) -> str:
     if not _RFC1123.match(v) or len(v) > 63:

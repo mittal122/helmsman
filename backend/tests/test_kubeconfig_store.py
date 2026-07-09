@@ -39,3 +39,12 @@ def test_requires_key(monkeypatch, tmp_path):
 def test_rejects_bad_name(store):
     with pytest.raises(ValueError):
         store.save("../evil", b"y")
+
+def test_rejects_trailing_newline_name(store):
+    # regex $ (not \Z) would match before a trailing \n — must be rejected
+    with pytest.raises(ValueError):
+        store.save("prod\n", b"x")
+
+def test_data_dir_mode_0700(store, tmp_path):
+    store.save("prod", b"x")
+    assert oct(tmp_path.stat().st_mode)[-3:] == "700"

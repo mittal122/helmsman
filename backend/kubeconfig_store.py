@@ -5,7 +5,7 @@ from cryptography.fernet import Fernet
 
 DATA_DIR = os.environ.get("KUBECONFIG_DATA_DIR",
                           os.path.join(os.path.dirname(__file__), "data", "kubeconfigs"))
-_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\Z")
 
 def _fernet() -> Fernet:
     key = os.environ.get("KUBECONFIG_ENC_KEY")
@@ -21,10 +21,12 @@ def _path(name: str) -> str:
 def save(name: str, raw: bytes) -> None:
     path = _path(name)
     os.makedirs(DATA_DIR, exist_ok=True)
+    os.chmod(DATA_DIR, 0o700)  # makedirs mode is umask-masked and skipped if dir preexists
     token = _fernet().encrypt(raw)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(token)
+    os.chmod(path, 0o600)  # re-assert on overwrite of a preexisting looser-permissioned file
 
 def list_names() -> list[str]:
     if not os.path.isdir(DATA_DIR):
