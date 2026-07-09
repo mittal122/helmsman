@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 import main
 
 def test_deploy_accepts_config_and_returns_id(monkeypatch):
-    async def fake_run(cfg, bus, approvals, monitors):
+    async def fake_run(cfg, bus, approvals, monitors, breakers):
         return None
     monkeypatch.setattr(main, "coordinator_run", fake_run)
     client = TestClient(main.app)
@@ -52,3 +52,12 @@ def test_onboard(monkeypatch):
     client = TestClient(main.app)
     r = client.post("/onboard", json={"app_description": "a node app"})
     assert r.status_code == 200 and r.json()["containerization_prompt"] == "P"
+
+def test_rollback_endpoint(monkeypatch):
+    called = {}
+    monkeypatch.setattr(main.rollback, "do_rollback",
+                        lambda n, ns, rev: called.update(n=n, ns=ns, rev=rev))
+    client = TestClient(main.app)
+    r = client.post("/rollback", json={"name": "demo", "namespace": "default", "revision": 1})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert called == {"n": "demo", "ns": "default", "rev": 1}

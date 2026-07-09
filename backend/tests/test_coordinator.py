@@ -4,6 +4,7 @@ from events import EventBus
 import coordinator
 import approvals as approvals_mod
 import monitors as monitors_mod
+import breakers as breakers_mod
 
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
@@ -21,7 +22,7 @@ async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
     mons = monitors_mod.Monitors()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2, "mode": "autonomous"},
-                          bus, approvals_mod.Approvals(), mons)
+                          bus, approvals_mod.Approvals(), mons, breakers_mod.Breaker())
 
     events = []
     while not q.empty():
@@ -45,7 +46,7 @@ async def test_validation_failure_stops_before_deploy(monkeypatch):
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
-                          monitors_mod.Monitors())
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
 
     assert installed["called"] is False
     types = []
@@ -69,7 +70,7 @@ async def test_rollout_timeout_emits_error(monkeypatch):
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2, "mode": "autonomous"},
-                          bus, approvals_mod.Approvals(), monitors_mod.Monitors())
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
 
     types = []
     while not q.empty():
@@ -87,7 +88,7 @@ async def test_exception_surfaced_as_error(monkeypatch):
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
-                          monitors_mod.Monitors())
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
 
     events = []
     while not q.empty():
@@ -122,7 +123,7 @@ async def test_manual_mode_waits_for_approval_then_deploys(monkeypatch):
                         lambda cfg: installed.__setitem__("called", True))
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
     mons = monitors_mod.Monitors()
-    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, mons))
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, mons, breakers_mod.Breaker()))
     await asyncio.sleep(0.05)
     assert installed["called"] is False           # blocked pending approval
     assert appr.resolve("app", True) is True       # approve
@@ -136,7 +137,7 @@ async def test_manual_reject_stops_before_deploy(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "install",
                         lambda cfg: installed.__setitem__("called", True))
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, monitors_mod.Monitors()))
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, monitors_mod.Monitors(), breakers_mod.Breaker()))
     await asyncio.sleep(0.05)
     appr.resolve("app", False)
     await task
@@ -151,7 +152,7 @@ async def test_autonomous_mode_skips_gate(monkeypatch):
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
     mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     types = [ (await q.get()).type for _ in range(q.qsize()) ]
     assert "endpoint" in types and "approval_required" not in types
 
@@ -164,7 +165,7 @@ async def test_secret_values_are_redacted_in_events(monkeypatch):
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
     mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr, mons, breakers_mod.Breaker())
     dumped = ""
     while not q.empty():
         dumped += str((await q.get()).to_dict())
@@ -189,7 +190,7 @@ async def test_monitor_stage_emits_health_and_stops(monkeypatch):
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     types = []
     while not q.empty():
         types.append((await q.get()).type)
@@ -206,7 +207,7 @@ async def test_monitor_stops_on_signal(monkeypatch):
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 10_000)
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    task = asyncio.create_task(coordinator.run(_cfg(mode="autonomous"), bus, appr, mons))
+    task = asyncio.create_task(coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker()))
     await asyncio.sleep(0.02)      # let it enter the monitor loop and emit some snapshots
     mons.stop("app")               # signal stop
     await asyncio.wait_for(task, timeout=2)   # must exit promptly, not run 10k cycles
@@ -226,7 +227,7 @@ async def test_verify_surfaces_deploy_time_failure(monkeypatch):
     monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 0)  # loop body runs 0 times -> straight to timeout else
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     events = []
     while not q.empty():
         events.append(await q.get())
@@ -255,7 +256,7 @@ async def test_verify_emits_failure_event_during_rollout(monkeypatch):
 
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     types = []
     while not q.empty():
         types.append((await q.get()).type)
@@ -278,7 +279,7 @@ async def test_monitor_failure_deduped_across_cycles(monkeypatch):
     monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 3)   # 3 cycles, same failure
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     events = []
     while not q.empty():
         events.append(await q.get())
@@ -309,7 +310,7 @@ async def test_failure_triggers_explanation(monkeypatch):
     monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
     types = []
     while not q.empty():
         types.append((await q.get()).type)
@@ -331,8 +332,98 @@ async def test_explanation_failure_does_not_crash(monkeypatch):
     monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)  # must not raise
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())  # must not raise
     types = []
     while not q.empty():
         types.append((await q.get()).type)
     assert "error" in types  # rollout still times out; no crash
+
+def _cfg_auto(**over):
+    base = {"name": "app", "image": "i:1", "namespace": "default", "port": 8080,
+            "replicas": 1, "mode": "autonomous", "secrets": {}}
+    base.update(over); return base
+
+@pytest.mark.asyncio
+async def test_autonomous_rollback_on_failure(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))  # never ready
+    monkeypatch.setattr(coordinator.monitor, "detect_failures", lambda n, ns: [])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve", lambda ctx: {
+        "root_cause": "", "plain_explanation": "", "evidence": [], "recommended_action": "",
+        "fix_prompt": "", "auto_remediable": False, "suggested_auto_action": "",
+        "severity": "low", "suspicious_input_detected": False})
+    monkeypatch.setattr(coordinator.rollback, "get_revisions",
+                        lambda n, ns: [{"revision": 1, "status": "superseded"},
+                                       {"revision": 2, "status": "deployed"}])
+    rolled = {}
+    monkeypatch.setattr(coordinator.rollback, "do_rollback",
+                        lambda n, ns, rev: rolled.update(rev=rev))
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 2)
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)
+    async def _no_sleep(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors(); brk = breakers_mod.Breaker(max_attempts=2)
+    await coordinator.run(_cfg_auto(), bus, appr, mons, brk)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "remediation" in types
+    assert rolled.get("rev") == 1     # rolled back to the prior good revision
+
+@pytest.mark.asyncio
+async def test_no_prior_revision_escalates(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))
+    monkeypatch.setattr(coordinator.monitor, "detect_failures", lambda n, ns: [])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve", lambda ctx: {
+        "root_cause": "", "plain_explanation": "", "evidence": [], "recommended_action": "",
+        "fix_prompt": "", "auto_remediable": False, "suggested_auto_action": "",
+        "severity": "low", "suspicious_input_detected": False})
+    monkeypatch.setattr(coordinator.rollback, "get_revisions",
+                        lambda n, ns: [{"revision": 1, "status": "deployed"}])  # first deploy, nothing prior
+    called = {"rb": False}
+    monkeypatch.setattr(coordinator.rollback, "do_rollback",
+                        lambda n, ns, rev: called.__setitem__("rb", True))
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 2)
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)
+    async def _no_sleep(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors(); brk = breakers_mod.Breaker()
+    await coordinator.run(_cfg_auto(), bus, appr, mons, brk)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "escalation" in types
+    assert called["rb"] is False
+
+@pytest.mark.asyncio
+async def test_breaker_tripped_freezes(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))
+    monkeypatch.setattr(coordinator.monitor, "detect_failures", lambda n, ns: [])
+    monkeypatch.setattr(coordinator.monitor, "get_logs", lambda n, ns: "")
+    monkeypatch.setattr(coordinator.error_resolver, "resolve", lambda ctx: {
+        "root_cause": "", "plain_explanation": "", "evidence": [], "recommended_action": "",
+        "fix_prompt": "", "auto_remediable": False, "suggested_auto_action": "",
+        "severity": "low", "suspicious_input_detected": False})
+    monkeypatch.setattr(coordinator.rollback, "get_revisions",
+                        lambda n, ns: [{"revision": 1, "status": "superseded"},
+                                       {"revision": 2, "status": "deployed"}])
+    monkeypatch.setattr(coordinator.rollback, "do_rollback", lambda n, ns, rev: None)
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 2)
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)
+    async def _no_sleep(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+    brk = breakers_mod.Breaker(max_attempts=1)
+    brk.record("app")   # already at the limit
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg_auto(), bus, appr, mons, brk)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "escalation" in types  # frozen by the breaker
