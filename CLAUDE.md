@@ -19,15 +19,25 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phases 0, 1, 2, 3 COMPLETE.** All on `main`, pushed to
-  https://github.com/mittal122/helmsman (public). Backend suite 57/57.
-- **Next deliverable = Phase 4 (autonomous mode + rollback):** `tools/rollback.py`
-  (`helm rollback` to last known-good; `helm history` for revisions); autonomous
-  auto-remediation that ACTS on the error-resolution agent's `auto_remediable`/
-  `suggested_auto_action` (currently emitted-only) — behind a circuit breaker
-  (max retries → freeze + escalate); destructive-op gate (delete ns/PVC/CRD stay
-  human-gated even in autonomous). Plan via `writing-plans`, build via
-  `subagent-driven-development`.
+- **Phases 0, 1, 2, 3, 4 COMPLETE.** All on `main`, pushed to
+  https://github.com/mittal122/helmsman (public). Backend suite 72/72.
+- **Next deliverable = Phase 5 (hardening — the final phase):** auth, multi-tenant
+  kubeconfig isolation + encryption, cloud clusters, image/policy scanning, cost
+  estimation. Plan via `writing-plans`, build via `subagent-driven-development`.
+- **Phase 4 delivered:** `tools/rollback.py` (`get_revisions` from `helm history`,
+  pure `previous_good_revision`, `do_rollback` via `helm rollback --wait`);
+  `remediation.py` (deny-by-default allowlist — only `rollback` auto-runs);
+  `breakers.py` (per-name attempt cap → freeze). Coordinator `remediate(reason)`
+  fires ONLY on Verify timeout in autonomous mode: breaker check → rollback target
+  from helm history (NEVER from LLM output) → escalate on no-prior-revision or
+  rollback failure. Manual `POST /rollback` endpoint (emits to event store) + UI
+  controls. **Auto-remediation is deterministic and injection-safe by absence of an
+  execution path — the agent's `auto_remediable`/`suggested_auto_action` are never
+  read in `remediate` (grep-proven).** E2E verified on kind: good v1 → bad v2 →
+  auto-rolled-back to rev 1 → healthy. Final opus review: ready-to-merge, fixes
+  applied. Known limitation documented in `rollback.py`: `previous_good_revision`'s
+  helm-status heuristic can mis-target with 2+ consecutive bad revisions (bounded by
+  rollback `--wait` + breaker; real fix = Phase 5 verified-revision tracking).
 - **Phase 3 delivered:** `agents/base.py` (loads `prompts/_system.md` + agent
   prompt, fills `{{placeholders}}`, calls Claude `claude-opus-4-8` via Anthropic
   SDK with structured output); onboarding/config-advisor/error-resolution modules;
