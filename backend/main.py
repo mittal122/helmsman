@@ -66,6 +66,10 @@ class RollbackRequest(BaseModel):
     namespace: str = "default"
     revision: int = Field(gt=0)
 
+    @field_validator("name", "namespace")
+    @classmethod
+    def _valid_name(cls, v): return _dns1123(v)
+
 class AdviseRequest(BaseModel):
     name: str = ""
     image: str = ""

@@ -1,9 +1,19 @@
 import json
+import re
 import subprocess
 
 _GOOD = {"deployed", "superseded"}
+_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+def _check(name: str, namespace: str) -> None:
+    # argv-flag-injection guard: a leading-dash name/namespace would be read as a helm
+    # flag. Validate here at the tool (choke point) so every caller — manual /rollback
+    # endpoint and coordinator auto-remediate — is covered.
+    if not _NAME_RE.match(name or "") or not _NAME_RE.match(namespace or ""):
+        raise ValueError("invalid name/namespace (must be RFC1123, no leading dash)")
 
 def get_revisions(name: str, namespace: str) -> list[dict]:
+    _check(name, namespace)
     r = subprocess.run(
         ["helm", "history", name, "-n", namespace, "-o", "json"],
         capture_output=True, text=True,
@@ -33,6 +43,7 @@ def previous_good_revision(revisions: list[dict]) -> int | None:
     return max(candidates) if candidates else None
 
 def do_rollback(name: str, namespace: str, revision: int) -> None:
+    _check(name, namespace)
     subprocess.run(
         ["helm", "rollback", name, str(revision), "-n", namespace,
          "--wait", "--timeout", "120s"],

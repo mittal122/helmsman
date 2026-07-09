@@ -1,6 +1,18 @@
 import json
 import subprocess
+import pytest
 from tools import rollback
+
+def test_flag_injection_rejected(monkeypatch):
+    # a leading-dash name/namespace must never reach helm as a flag
+    called = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: called.append(a))
+    for bad in ("--set", "-x", "a/b", "UPPER"):
+        with pytest.raises(ValueError):
+            rollback.do_rollback(bad, "default", 1)
+        with pytest.raises(ValueError):
+            rollback.get_revisions("demo", bad)
+    assert called == []  # nothing ever executed
 
 def test_previous_good_revision_picks_highest_prior_good():
     revs = [{"revision": 1, "status": "superseded"},
