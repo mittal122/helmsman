@@ -209,3 +209,42 @@ async def test_monitor_stops_on_signal(monkeypatch):
         types.append((await q.get()).type)
     assert types.count("health") >= 1
     assert "stage_exit" in types   # Monitor stage exited cleanly
+
+@pytest.mark.asyncio
+async def test_verify_surfaces_deploy_time_failure(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))  # never ready
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "broken-x", "container": "app",
+                                        "type": "ImagePullBackOff", "message": "no such image"}])
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 0)  # loop body runs 0 times -> straight to timeout else
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    err = [e for e in events if e.type == "error"]
+    assert err and err[0].data.get("failures")   # timeout error carries the detected failure
+    assert err[0].data["failures"][0]["type"] == "ImagePullBackOff"
+
+@pytest.mark.asyncio
+async def test_verify_emits_failure_event_during_rollout(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (0, 1))
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "broken-x", "container": "app",
+                                        "type": "ImagePullBackOff", "message": "x"}])
+    monkeypatch.setattr(coordinator, "ROLLOUT_TIMEOUT_S", 2)  # ~1 loop iteration (POLL_INTERVAL_S default 2)
+
+    async def _no_sleep(x):
+        pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _no_sleep)
+
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "failure" in types   # surfaced during Verify, not just at timeout

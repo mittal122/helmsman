@@ -80,18 +80,25 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         current = "Verify"
         await emit("stage_enter", "Verify", "Waiting for rollout")
         last = None
+        seen_failures: set = set()
         for _ in range(ROLLOUT_TIMEOUT_S // POLL_INTERVAL_S):
             ready, desired = await asyncio.to_thread(deploy.get_replicas, name, ns)
             if (ready, desired) != last:
                 await emit("rollout", "Verify", f"{ready}/{desired} ready",
                            {"ready": ready, "desired": desired})
                 last = (ready, desired)
+            for f in await asyncio.to_thread(monitor.detect_failures, name, ns):
+                key = (f["pod"], f["type"])
+                if key not in seen_failures:
+                    seen_failures.add(key)
+                    await emit("failure", "Verify", f"{f['type']} on {f['pod']}", f)
             if desired and ready >= desired:
                 break
             await asyncio.sleep(POLL_INTERVAL_S)
         else:
+            failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             await emit("error", "Verify", "Rollout did not complete in time",
-                       {"timeout_s": ROLLOUT_TIMEOUT_S})
+                       {"timeout_s": ROLLOUT_TIMEOUT_S, "failures": failures})
             return
 
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
