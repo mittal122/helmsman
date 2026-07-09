@@ -33,6 +33,10 @@
     <input name="port" placeholder="port" value="8080" type="number">
     <input name="replicas" placeholder="replicas" value="2" type="number">
     <select name="mode"><option value="manual">Manual</option><option value="autonomous">Autonomous</option></select>
+    <span style="margin-left:8px">
+      <input id="rb-rev" type="number" placeholder="rev" style="width:60px">
+      <button id="rb-btn" style="background:#f87171">Rollback</button>
+    </span>
     <input name="env" placeholder="env KEY=VAL,KEY2=VAL2">
     <input name="secrets" placeholder="secrets KEY=VAL (redacted)">
     <button type="submit">Deploy</button>
@@ -86,12 +90,22 @@
       div.textContent = `🧠 ${e.message}${e.data.recommended_action ? " — fix: " + e.data.recommended_action : ""}`;
       log.appendChild(div);
     }
+    if (e.type === "remediation" || e.type === "escalation") {
+      const div = document.createElement("div");
+      div.className = "ev " + (e.type === "escalation" ? "error" : "endpoint");
+      div.textContent = (e.type === "escalation" ? "⚠ " : "↩ ") + e.message;
+      log.appendChild(div);
+    }
   };
   document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-stop").onclick = () =>
     fetch("/monitor/stop", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: currentName})});
+  document.getElementById("rb-btn").onclick = () =>
+    fetch("/rollback", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name: currentName, namespace: "default",
+                            revision: Number(document.getElementById("rb-rev").value)})});
   document.getElementById("ob-btn").onclick = async () => {
     const r = await fetch("/onboard", {method:"POST",headers:{"Content-Type":"application/json"},
       body: JSON.stringify({app_description: document.getElementById("ob-desc").value})});
