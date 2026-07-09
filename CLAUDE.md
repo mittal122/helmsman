@@ -19,13 +19,20 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phase 0 COMPLETE + Phase 1 COMPLETE.** Both on `main`, pushed to
-  https://github.com/mittal122/helmsman (public). Backend suite 32/32; both
+- **Phases 0, 1, 2 COMPLETE.** All on `main`, pushed to
+  https://github.com/mittal122/helmsman (public). Backend suite 48/48; all three
   phases verified end-to-end on kind.
-- **Next deliverable = Phase 2 (monitoring):** deploy kube-prometheus-stack +
-  Loki, deterministic failure detection (CrashLoopBackOff/ImagePullBackOff/
-  OOMKilled/Pending), live metrics/logs in the UI. Plan via `writing-plans`,
-  build via `subagent-driven-development` (same loop as Phases 0–1).
+- **Next deliverable = Phase 3 (LLM layer — thin):** onboarding + config-advisor +
+  error-resolution agents (Claude, Anthropic SDK direct — no LangChain/LangGraph),
+  loading `prompts/*.md`; wire config-advisor into Collect, onboarding into
+  Onboard, error-resolution into Remediate; prompt-injection guardrails (§7.2).
+  Plan via `writing-plans`, build via `subagent-driven-development`.
+- **Phase 2 delivered (lightweight, per updated spec):** metrics-server install
+  script; deterministic pod-failure detection (CrashLoopBackOff/ImagePullBackOff/
+  ErrImagePull/OOMKilled/Pending) from pod status; metrics via `kubectl top`, logs
+  via `kubectl logs`; stoppable continuous Monitor stage (stop flag + max-cycle cap,
+  `/monitor/stop`); deploy-time failure detection surfaced DURING Verify; UI
+  monitoring panel. Prometheus/Loki deferred (spec §12 updated).
 - **Phase 0 delivered:** FSM coordinator, event bus, SSE UI, Helm chart (§6
   defaults), manifests/validate/deploy tools, deploy→kind→endpoint.
 - **Phase 1 delivered:** ConfigMap/Secret/Ingress/HPA/PDB templates, secret
