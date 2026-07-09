@@ -19,11 +19,29 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phases 0, 1, 2, 3, 4 COMPLETE.** All on `main`, pushed to
-  https://github.com/mittal122/helmsman (public). Backend suite 72/72.
-- **Next deliverable = Phase 5 (hardening — the final phase):** auth, multi-tenant
-  kubeconfig isolation + encryption, cloud clusters, image/policy scanning, cost
-  estimation. Plan via `writing-plans`, build via `subagent-driven-development`.
+- **Phases 0, 1, 2, 3, 4, 5 COMPLETE.** Phase 5 (hardening) was the final phase.
+  Pushed to `phase-5-hardening` on https://github.com/mittal122/helmsman (public).
+  Backend suite 98/98.
+- **Phase 5 delivered:** `auth.py` (`require_token` dependency — single **operator
+  token** via `AUTH_TOKEN` env var, `Authorization: Bearer <token>` on every
+  mutating endpoint, `hmac.compare_digest`; **default-open when unset**, for
+  local/dev); **not** per-user accounts — per-user multi-tenancy is a documented,
+  deferred known limitation (spec §7.3). `kubeconfig_store.py`: named kubeconfigs
+  **encrypted at rest** (Fernet, key from `KUBECONFIG_ENC_KEY`), listed by name
+  only (no content exposure), decrypted only to a `0600` temp file for the
+  duration of an active deploy, then removed; `/deploy` takes an optional
+  `cluster` field selecting a stored kubeconfig (blank = local `kind`/ambient).
+  Cloud-cluster path is provider-agnostic (any valid kubeconfig); real-cloud E2E
+  is deferred (no cloud creds in the build env) — verified instead against a
+  second local `kind` cluster selected via `cluster`. `scan.py`: `trivy image`
+  gate (image findings by severity) + `trivy config` advisory (policy), both with
+  a graceful skip-and-warn path since `trivy` isn't installed in the build env
+  (real-scan E2E deferred, same reasoning as Phase 3's LLM E2E). `cost.py`:
+  deterministic monthly cost estimate from CPU/mem requests (no external
+  dependency). UI: operator-token field (`localStorage` key `helmsman_token`,
+  `authHeaders()` on every mutating fetch), `cluster` input (datalist populated
+  from `GET /kubeconfigs`), and `scan`/`cost` SSE event rendering — via
+  `textContent`, never `innerHTML` (the DOM-XSS invariant holds).
 - **Phase 4 delivered:** `tools/rollback.py` (`get_revisions` from `helm history`,
   pure `previous_good_revision`, `do_rollback` via `helm rollback --wait`);
   `remediation.py` (deny-by-default allowlist — only `rollback` auto-runs);
