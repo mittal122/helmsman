@@ -1,7 +1,7 @@
 import asyncio
 import os
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback, scan
+from tools import manifests, validate, deploy, monitor, rollback, scan, cost
 import remediation
 import kubeconfig_store
 from breakers import Breaker
@@ -105,6 +105,9 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_enter", "Generate", "Rendering manifests via Helm")
         rendered = await asyncio.to_thread(manifests.render, cfg)
         await emit("manifest", "Generate", "Rendered manifests", {"yaml": rendered})
+        estimate = await asyncio.to_thread(cost.estimate, rendered)
+        await emit("cost", "Generate",
+                   f"Estimated ${estimate['monthly_usd']}/mo", estimate)
         await emit("stage_exit", "Generate", "Manifests ready")
 
         # Validate
