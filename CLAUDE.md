@@ -42,6 +42,15 @@ a decision, update the spec in the same change.
   `authHeaders()` on every mutating fetch), `cluster` input (datalist populated
   from `GET /kubeconfigs`), and `scan`/`cost` SSE event rendering — via
   `textContent`, never `innerHTML` (the DOM-XSS invariant holds).
+- **Deferred (Phase 5 final review — all Minor, none blocking):** concurrency-guard
+  to reject a second in-flight `/deploy` (global `os.environ["KUBECONFIG"]` can
+  cross-wire concurrent deploys to different clusters — safe under single-operator
+  scope, doc-guarded); `auth.require_token` raises `TypeError`→500 on a non-ASCII
+  `Authorization` header (fails CLOSED, no bypass — catch → 401); `scan_config`
+  writes rendered manifests (may contain base64 Secret values) to a `0700` mkdtemp
+  briefly (same-user-only, removed in `finally`); `cost.PRICE` is a placeholder
+  tuning knob; name-validation regex duplicated across `kubeconfig_store.py`/
+  `main.py`/`tools/rollback.py` (all `\Z`-anchored) — hoist to `guardrails`.
 - **Phase 4 delivered:** `tools/rollback.py` (`get_revisions` from `helm history`,
   pure `previous_good_revision`, `do_rollback` via `helm rollback --wait`);
   `remediation.py` (deny-by-default allowlist — only `rollback` auto-runs);
