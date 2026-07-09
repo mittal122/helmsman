@@ -1,5 +1,6 @@
 import base64
 import copy
+import json
 
 REDACTED = "••••"
 
@@ -11,6 +12,9 @@ def secret_variants(secrets: dict) -> set[str]:
         s = str(v)
         out.add(s)
         out.add(base64.b64encode(s.encode()).decode())
+        esc = json.dumps(s)[1:-1]   # go/helm `quote`-style escaping of " \ newline tab
+        if esc != s:
+            out.add(esc)
     return out
 
 def _redact_str(s: str, variants: set[str]) -> str:

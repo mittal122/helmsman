@@ -42,5 +42,7 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
     criticals = [ln for ln in ks.stdout.splitlines() if "[CRITICAL]" in ln]
     if criticals:
         issues.append("kube-score: " + "; ".join(criticals))
+    if ks.returncode not in (0, 1) and not criticals:
+        issues.append("kube-score: exec error: " + ks.stderr.strip())
 
     return (len(issues) == 0, issues)

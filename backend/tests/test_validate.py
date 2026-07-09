@@ -33,3 +33,10 @@ def test_kube_score_warnings_pass(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: seq.pop(0))
     ok, issues = validate.validate("kind: Deployment", "default")
     assert ok is True
+
+def test_kube_score_exec_error_reported(monkeypatch):
+    seq = [_R(0), _R(0), _R(2, err="boom")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: seq.pop(0))
+    ok, issues = validate.validate("kind: Deployment", "default")
+    assert ok is False
+    assert any("exec error" in i for i in issues)

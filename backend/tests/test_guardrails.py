@@ -31,3 +31,12 @@ def test_redact_redacts_dict_keys():
     v = guardrails.secret_variants({"T": "s3cret"})
     out = guardrails.redact({"s3cret": "x"}, v)
     assert "s3cret" not in str(out)
+
+def test_redact_covers_helm_quote_escaped_secret():
+    v = guardrails.secret_variants({"P": 'p@ss"word'})
+    # simulate what helm `quote` emits in the rendered manifest
+    rendered = 'stringData:\n  P: "p@ss\\"word"'
+    out = guardrails.redact({"yaml": rendered}, v)
+    assert 'p@ss\\"word' not in out["yaml"]   # escaped form redacted
+    assert 'p@ss"word' not in str(out)
+    assert "••••" in out["yaml"]
