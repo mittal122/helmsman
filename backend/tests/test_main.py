@@ -38,3 +38,17 @@ def test_monitor_stop(monkeypatch):
     r = client.post("/monitor/stop", json={"name": "demo"})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert called["k"] == "demo"
+
+def test_advise_config(monkeypatch):
+    monkeypatch.setattr(main.config_advisor, "advise",
+                        lambda cfg: {"suggestions": [], "summary": "ok"})
+    client = TestClient(main.app)
+    r = client.post("/advise-config", json={"name": "orders", "image": "orders:1"})
+    assert r.status_code == 200 and r.json()["summary"] == "ok"
+
+def test_onboard(monkeypatch):
+    monkeypatch.setattr(main.onboarding, "generate",
+                        lambda cfg: {"containerization_prompt": "P", "assumptions": [], "what_to_bring_back": "img"})
+    client = TestClient(main.app)
+    r = client.post("/onboard", json={"app_description": "a node app"})
+    assert r.status_code == 200 and r.json()["containerization_prompt"] == "P"

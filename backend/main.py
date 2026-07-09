@@ -9,6 +9,7 @@ from events import EventBus
 from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
+from agents import onboarding, config_advisor
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
@@ -57,6 +58,21 @@ class ApproveRequest(BaseModel):
 class MonitorStopRequest(BaseModel):
     name: str
 
+class AdviseRequest(BaseModel):
+    name: str = ""
+    image: str = ""
+    port: int = 0
+    language_framework: str = ""
+    expected_traffic: str = ""
+    notes: str = ""
+
+class OnboardRequest(BaseModel):
+    app_description: str = ""
+    language_framework: str = ""
+    start_command: str = ""
+    port: int = 0
+    notes: str = ""
+
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors))
@@ -72,6 +88,14 @@ async def approve(req: ApproveRequest):
 async def monitor_stop(req: MonitorStopRequest):
     monitors.stop(req.name)
     return {"ok": True}
+
+@app.post("/advise-config")
+async def advise_config(req: AdviseRequest):
+    return await asyncio.to_thread(config_advisor.advise, req.model_dump())
+
+@app.post("/onboard")
+async def onboard(req: OnboardRequest):
+    return await asyncio.to_thread(onboarding.generate, req.model_dump())
 
 @app.get("/events")
 async def events():
