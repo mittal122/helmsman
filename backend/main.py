@@ -2,9 +2,10 @@ import asyncio
 import json
 import os
 import re
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator, Field
+import auth
 from events import Event, EventBus
 from coordinator import run as coordinator_run
 from approvals import Approvals
@@ -85,14 +86,14 @@ class OnboardRequest(BaseModel):
     port: int = 0
     notes: str = ""
 
-@app.post("/deploy")
+@app.post("/deploy", dependencies=[Depends(auth.require_token)])
 async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return {"deployment_id": req.name}
 
-@app.post("/rollback")
+@app.post("/rollback", dependencies=[Depends(auth.require_token)])
 async def rollback_endpoint(req: RollbackRequest):
     # Manual rollback still emits to the event store — transparency invariant applies to
     # every cluster mutation. No secret values on this path, so no redaction needed.
@@ -109,20 +110,20 @@ async def rollback_endpoint(req: RollbackRequest):
                             data={"revision": req.revision}))
     return {"ok": True}
 
-@app.post("/approve")
+@app.post("/approve", dependencies=[Depends(auth.require_token)])
 async def approve(req: ApproveRequest):
     return {"ok": approvals.resolve(req.name, req.approved)}
 
-@app.post("/monitor/stop")
+@app.post("/monitor/stop", dependencies=[Depends(auth.require_token)])
 async def monitor_stop(req: MonitorStopRequest):
     monitors.stop(req.name)
     return {"ok": True}
 
-@app.post("/advise-config")
+@app.post("/advise-config", dependencies=[Depends(auth.require_token)])
 async def advise_config(req: AdviseRequest):
     return await asyncio.to_thread(config_advisor.advise, req.model_dump())
 
-@app.post("/onboard")
+@app.post("/onboard", dependencies=[Depends(auth.require_token)])
 async def onboard(req: OnboardRequest):
     return await asyncio.to_thread(onboarding.generate, req.model_dump())
 

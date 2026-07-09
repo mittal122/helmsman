@@ -61,3 +61,9 @@ def test_rollback_endpoint(monkeypatch):
     r = client.post("/rollback", json={"name": "demo", "namespace": "default", "revision": 1})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert called == {"n": "demo", "ns": "default", "rev": 1}
+
+def test_deploy_401_when_token_set(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "s3cret")
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app", "image": "i:1"})
+    assert r.status_code == 401
