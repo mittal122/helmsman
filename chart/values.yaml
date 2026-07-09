@@ -1,0 +1,12 @@
+name: app
+image: mendhak/http-https-echo:31
+port: 8080
+replicas: 2
+probePath: /
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
