@@ -2,6 +2,7 @@ import asyncio
 import pytest
 from events import EventBus
 import coordinator
+import approvals as approvals_mod
 
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
@@ -15,7 +16,8 @@ async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus)
+                           "port": 8080, "replicas": 2, "mode": "autonomous"},
+                          bus, approvals_mod.Approvals())
 
     events = []
     while not q.empty():
@@ -38,7 +40,7 @@ async def test_validation_failure_stops_before_deploy(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus)
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals())
 
     assert installed["called"] is False
     types = []
@@ -61,7 +63,8 @@ async def test_rollout_timeout_emits_error(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus)
+                           "port": 8080, "replicas": 2, "mode": "autonomous"},
+                          bus, approvals_mod.Approvals())
 
     types = []
     while not q.empty():
@@ -78,7 +81,7 @@ async def test_exception_surfaced_as_error(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus)
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals())
 
     events = []
     while not q.empty():
@@ -87,3 +90,68 @@ async def test_exception_surfaced_as_error(monkeypatch):
     assert "error" in types
     err = next(e for e in events if e.type == "error")
     assert err.stage == "Generate"
+
+def _stub_tools(monkeypatch):
+    monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
+    monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
+    monkeypatch.setattr(coordinator.deploy, "detect_capabilities",
+                        lambda: {"ingress_controller": True, "metrics_server": True})
+    monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (1, 1))
+    monkeypatch.setattr(coordinator.deploy, "get_endpoint",
+                        lambda n, ns, p: {"service": "s", "port": p, "port_forward": "pf"})
+
+def _cfg(**over):
+    base = {"name": "app", "image": "i:1", "namespace": "default", "port": 8080,
+            "replicas": 1, "mode": "manual", "secrets": {}}
+    base.update(over); return base
+
+@pytest.mark.asyncio
+async def test_manual_mode_waits_for_approval_then_deploys(monkeypatch):
+    _stub_tools(monkeypatch)
+    installed = {"called": False}
+    monkeypatch.setattr(coordinator.deploy, "install",
+                        lambda cfg: installed.__setitem__("called", True))
+    bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr))
+    await asyncio.sleep(0.05)
+    assert installed["called"] is False           # blocked pending approval
+    assert appr.resolve("app", True) is True       # approve
+    await task
+    assert installed["called"] is True
+
+@pytest.mark.asyncio
+async def test_manual_reject_stops_before_deploy(monkeypatch):
+    _stub_tools(monkeypatch)
+    installed = {"called": False}
+    monkeypatch.setattr(coordinator.deploy, "install",
+                        lambda cfg: installed.__setitem__("called", True))
+    bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr))
+    await asyncio.sleep(0.05)
+    appr.resolve("app", False)
+    await task
+    assert installed["called"] is False
+    types = [ (await q.get()).type for _ in range(q.qsize()) ]
+    assert "rejected" in types
+
+@pytest.mark.asyncio
+async def test_autonomous_mode_skips_gate(monkeypatch):
+    _stub_tools(monkeypatch)
+    bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr)
+    types = [ (await q.get()).type for _ in range(q.qsize()) ]
+    assert "endpoint" in types and "approval_required" not in types
+
+@pytest.mark.asyncio
+async def test_secret_values_are_redacted_in_events(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: "stringData:\n  TOKEN: s3cret")
+    bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
+    await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr)
+    dumped = ""
+    while not q.empty():
+        dumped += str((await q.get()).to_dict())
+    assert "s3cret" not in dumped
+    assert "••••" in dumped
