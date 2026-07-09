@@ -13,10 +13,12 @@ async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (2, 2))
     monkeypatch.setattr(coordinator.deploy, "get_endpoint",
                         lambda n, ns, p: {"service": "s", "port": p, "port_forward": "pf"})
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
 
     bus = EventBus()
     q = bus.subscribe()
-    mons = monitors_mod.Monitors(); mons.stop("app")
+    mons = monitors_mod.Monitors()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2, "mode": "autonomous"},
                           bus, approvals_mod.Approvals(), mons)
@@ -113,11 +115,13 @@ def _cfg(**over):
 @pytest.mark.asyncio
 async def test_manual_mode_waits_for_approval_then_deploys(monkeypatch):
     _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     installed = {"called": False}
     monkeypatch.setattr(coordinator.deploy, "install",
                         lambda cfg: installed.__setitem__("called", True))
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    mons = monitors_mod.Monitors(); mons.stop("app")
+    mons = monitors_mod.Monitors()
     task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, mons))
     await asyncio.sleep(0.05)
     assert installed["called"] is False           # blocked pending approval
@@ -143,8 +147,10 @@ async def test_manual_reject_stops_before_deploy(monkeypatch):
 @pytest.mark.asyncio
 async def test_autonomous_mode_skips_gate(monkeypatch):
     _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    mons = monitors_mod.Monitors(); mons.stop("app")
+    mons = monitors_mod.Monitors()
     await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
     types = [ (await q.get()).type for _ in range(q.qsize()) ]
     assert "endpoint" in types and "approval_required" not in types
@@ -154,8 +160,10 @@ async def test_secret_values_are_redacted_in_events(monkeypatch):
     _stub_tools(monkeypatch)
     monkeypatch.setattr(coordinator.manifests, "render",
                         lambda cfg: "stringData:\n  TOKEN: s3cret")
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    mons = monitors_mod.Monitors(); mons.stop("app")
+    mons = monitors_mod.Monitors()
     await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr, mons)
     dumped = ""
     while not q.empty():
@@ -172,12 +180,32 @@ async def test_monitor_stage_emits_health_and_stops(monkeypatch):
     monkeypatch.setattr(coordinator.monitor, "get_metrics",
                         lambda n, ns: [{"pod": "p", "cpu": "5m", "memory": "40Mi"}])
     monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
-    mons.stop("app")   # stop immediately so the loop runs exactly one cycle then exits
     await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
     types = []
     while not q.empty():
         types.append((await q.get()).type)
     assert "health" in types
     assert "failure" in types      # the injected CrashLoopBackOff surfaced
+
+@pytest.mark.asyncio
+async def test_monitor_stops_on_signal(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.monitor, "detect_failures", lambda n, ns: [])
+    monkeypatch.setattr(coordinator.monitor, "get_metrics", lambda n, ns: [])
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    # high cap so ONLY the stop signal can end the loop
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 10_000)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    task = asyncio.create_task(coordinator.run(_cfg(mode="autonomous"), bus, appr, mons))
+    await asyncio.sleep(0.02)      # let it enter the monitor loop and emit some snapshots
+    mons.stop("app")               # signal stop
+    await asyncio.wait_for(task, timeout=2)   # must exit promptly, not run 10k cycles
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert types.count("health") >= 1
+    assert "stage_exit" in types   # Monitor stage exited cleanly

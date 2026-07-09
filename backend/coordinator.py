@@ -101,9 +101,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Monitor (continuous, stoppable)
         current = "Monitor"
         await emit("stage_enter", "Monitor", "Monitoring deployment")
-        # note: no monitors.start(name) here — a caller may have pre-stopped this
-        # monitor (or another run for the same name) and calling start() would
-        # silently clear that flag before the loop's own is_stopped check runs.
+        monitors.start(name)   # reset any stale stop flag from a prior run of this name
         for _ in range(MONITOR_MAX_CYCLES):
             failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             metrics = await asyncio.to_thread(monitor.get_metrics, name, ns)
