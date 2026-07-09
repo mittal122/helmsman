@@ -17,6 +17,15 @@
 </head>
 <body>
   <h1>⎈ Helmsman — live deployment</h1>
+  <details style="margin-bottom:12px"><summary>Not containerized? Get a setup prompt</summary>
+    <input id="ob-desc" placeholder="describe your app (e.g. node express api on 3000)" style="width:60%">
+    <button id="ob-btn">Get prompt</button>
+    <pre id="ob-out" style="white-space:pre-wrap;color:#93a4b3"></pre>
+  </details>
+  <details style="margin-bottom:12px"><summary>Suggest config for me</summary>
+    <input id="ca-name" placeholder="name"><input id="ca-image" placeholder="image"><button id="ca-btn">Suggest</button>
+    <pre id="ca-out" style="white-space:pre-wrap;color:#93a4b3"></pre>
+  </details>
   <form id="f">
     <input name="name" placeholder="name" value="demo" required>
     <input name="image" placeholder="image" value="mendhak/http-https-echo:31" required>
@@ -71,12 +80,31 @@
       const fl = document.getElementById("failures");
       fl.textContent = (e.data.failures || []).map(f => `⚠ ${f.type} on ${f.pod}`).join("\n");
     }
+    if (e.type === "explanation") {
+      const div = document.createElement("div");
+      div.className = "ev endpoint";
+      div.textContent = `🧠 ${e.message}${e.data.recommended_action ? " — fix: " + e.data.recommended_action : ""}`;
+      log.appendChild(div);
+    }
   };
   document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-stop").onclick = () =>
     fetch("/monitor/stop", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: currentName})});
+  document.getElementById("ob-btn").onclick = async () => {
+    const r = await fetch("/onboard", {method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({app_description: document.getElementById("ob-desc").value})});
+    const d = await r.json();
+    document.getElementById("ob-out").textContent = d.containerization_prompt || JSON.stringify(d);
+  };
+  document.getElementById("ca-btn").onclick = async () => {
+    const r = await fetch("/advise-config", {method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name: document.getElementById("ca-name").value, image: document.getElementById("ca-image").value})});
+    const d = await r.json();
+    document.getElementById("ca-out").textContent =
+      (d.summary ? d.summary + "\n" : "") + (d.suggestions||[]).map(s => `${s.field}: ${s.value} — ${s.reason}`).join("\n");
+  };
   document.getElementById("f").onsubmit = async (ev) => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
