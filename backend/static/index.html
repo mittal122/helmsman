@@ -35,7 +35,7 @@
     <select name="mode"><option value="manual">Manual</option><option value="autonomous">Autonomous</option></select>
     <span style="margin-left:8px">
       <input id="rb-rev" type="number" placeholder="rev" style="width:60px">
-      <button id="rb-btn" style="background:#f87171">Rollback</button>
+      <button id="rb-btn" type="button" style="background:#f87171">Rollback</button>
     </span>
     <input name="env" placeholder="env KEY=VAL,KEY2=VAL2">
     <input name="secrets" placeholder="secrets KEY=VAL (redacted)">
@@ -55,6 +55,7 @@
 <script>
   function kv(s){ const o={}; (s||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(p=>{const i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);}); return o; }
   let currentName = "";
+  let currentNamespace = "default";
   const log = document.getElementById("log");
   const approveBar = document.getElementById("approve");
   const es = new EventSource("/events");
@@ -102,10 +103,16 @@
   document.getElementById("btn-stop").onclick = () =>
     fetch("/monitor/stop", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({name: currentName})});
-  document.getElementById("rb-btn").onclick = () =>
+  document.getElementById("rb-btn").onclick = () => {
+    const rev = parseInt(document.getElementById("rb-rev").value, 10);
+    if (!Number.isInteger(rev) || rev <= 0) {
+      alert("Enter a valid revision number");
+      return;
+    }
     fetch("/rollback", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({name: currentName, namespace: "default",
-                            revision: Number(document.getElementById("rb-rev").value)})});
+      body: JSON.stringify({name: currentName, namespace: currentNamespace,
+                            revision: rev})});
+  };
   document.getElementById("ob-btn").onclick = async () => {
     const r = await fetch("/onboard", {method:"POST",headers:{"Content-Type":"application/json"},
       body: JSON.stringify({app_description: document.getElementById("ob-desc").value})});
@@ -123,6 +130,7 @@
     ev.preventDefault();
     const fd = new FormData(ev.target);
     currentName = fd.get("name");
+    currentNamespace = fd.get("namespace") || "default";
     await fetch("/deploy", { method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         name: fd.get("name"), image: fd.get("image"), namespace: fd.get("namespace"),
