@@ -1,7 +1,7 @@
 import asyncio
 import os
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback
+from tools import manifests, validate, deploy, monitor, rollback, scan
 import remediation
 import kubeconfig_store
 from breakers import Breaker
@@ -131,6 +131,22 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         else:
             await emit("info", "Approve", "Autonomous mode — auto-approved")
             await emit("stage_exit", "Approve", "Approved")
+
+        # Scan (image vulns gate + advisory misconfig)
+        current = "Scan"
+        await emit("stage_enter", "Scan", "Scanning image and manifests")
+        img_scan = await asyncio.to_thread(scan.scan_image, cfg["image"])
+        cfg_scan = await asyncio.to_thread(scan.scan_config, rendered)
+        await emit("scan", "Scan", img_scan["summary"],
+                   {"image": img_scan, "config": cfg_scan})
+        if img_scan["available"] and not img_scan["ok"]:
+            await emit("error", "Scan",
+                       f"Image scan gate failed: {img_scan['summary']}",
+                       {"findings": img_scan["findings"]})
+            return
+        if not img_scan["available"]:
+            await emit("info", "Scan", "trivy not installed — image scan skipped (not a pass)")
+        await emit("stage_exit", "Scan", "Scan complete")
 
         # Deploy
         current = "Deploy"

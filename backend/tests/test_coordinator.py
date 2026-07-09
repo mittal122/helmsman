@@ -454,6 +454,32 @@ def test_cluster_selection_sets_and_cleans_kubeconfig(monkeypatch, tmp_path):
     assert not _os.path.exists(fake)                  # unlinked in finally
 
 @pytest.mark.asyncio
+async def test_scan_gate_blocks_deploy_on_critical_finding(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
+        "available": True, "ok": False,
+        "findings": [{"id": "CVE-1", "severity": "CRITICAL", "pkg": "openssl", "title": "bad"}],
+        "summary": "1 vuln(s) at/above CRITICAL"})
+    monkeypatch.setattr(coordinator.scan, "scan_config", lambda manifests: {
+        "available": True, "ok": True, "findings": [], "summary": "0 misconfig(s) (advisory)"})
+    installed = {"called": False}
+    monkeypatch.setattr(coordinator.deploy, "install",
+                        lambda cfg: installed.__setitem__("called", True))
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg_auto(), bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    types = [e.type for e in events]
+    assert installed["called"] is False   # gate blocked Deploy
+    assert "scan" in types
+    assert "error" in types
+    err = next(e for e in events if e.type == "error")
+    assert err.stage == "Scan"
+    assert "endpoint" not in types
+
+@pytest.mark.asyncio
 async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
     def _boom(name):
         raise KeyError("nope")
