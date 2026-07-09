@@ -101,6 +101,10 @@ async def test_exception_surfaced_as_error(monkeypatch):
 def _stub_tools(monkeypatch):
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
+    monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
+        "available": False, "ok": True, "findings": [], "summary": "stub"})
+    monkeypatch.setattr(coordinator.scan, "scan_config", lambda manifests: {
+        "available": False, "ok": True, "findings": [], "summary": "stub"})
     monkeypatch.setattr(coordinator.deploy, "detect_capabilities",
                         lambda: {"ingress_controller": True, "metrics_server": True})
     monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)

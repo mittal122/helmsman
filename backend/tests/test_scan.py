@@ -27,3 +27,20 @@ def test_scan_image_graceful_when_absent(monkeypatch):
     r = scan.scan_image("img:1")
     assert r["available"] is False and r["ok"] is True   # skip, never silently fail-open as "clean"
     assert "skipped" in r["summary"]
+
+def test_scan_image_error_is_inconclusive_not_clean(monkeypatch):
+    class _R:
+        returncode = 1; stdout = ""; stderr = "db error"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+    r = scan.scan_image("img:1")
+    assert r["available"] is True and r["ok"] is True and r["findings"] == []
+    assert "inconclusive" in r["summary"] or "not a pass" in r["summary"]
+
+def test_scan_image_refuses_suspicious_ref(monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
+    for bad in ("--evil", "bad image"):
+        r = scan.scan_image(bad)
+        assert r["ok"] is False
+        assert "refus" in r["summary"] or "suspicious" in r["summary"]
+    assert calls["n"] == 0   # subprocess never invoked for refused refs
