@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agent Types — with a Practical Use Case for Each</title>
+<style>
+  :root {
+    --ground:#F6F8FA; --surface:#FFFFFF; --surface-2:#EDF2F5;
+    --ink:#111A22; --muted:#54626F; --faint:#8593A0; --border:#E1E8ED;
+    --accent:#0F766E; --accent-2:#0B5C55; --accent-soft:#E1F1EF;
+    --mono: ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0D1319; --surface:#141D26; --surface-2:#1B2731;
+      --ink:#E9EFF3; --muted:#93A1AD; --faint:#6E7D89; --border:#25323D;
+      --accent:#2DD4BF; --accent-2:#5EEAD4; --accent-soft:#14312D;
+    }
+  }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); line-height:1.6;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 24px; }
+
+  .eyebrow {
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+    display:inline-block; margin:0 0 14px;
+  }
+  h1 { font-size:clamp(2rem,5vw,2.9rem); line-height:1.06; letter-spacing:-.02em;
+    font-weight:800; margin:0 0 16px; text-wrap:balance; }
+  h2 { font-size:1.35rem; font-weight:750; letter-spacing:-.01em; margin:0 0 10px; }
+  p { margin:0 0 14px; color:var(--muted); }
+  p.lead { font-size:1.15rem; color:var(--ink); max-width:720px; }
+  strong { color:var(--ink); font-weight:650; }
+
+  header.hero { padding:70px 0 34px; }
+  .tag {
+    display:inline-flex; gap:8px; align-items:center;
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border:1px solid var(--border); border-radius:999px;
+    padding:5px 12px; margin-bottom:24px; background:var(--surface);
+  }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
+
+  /* Selected callout */
+  .pick {
+    display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start;
+    background:var(--accent-soft); border:1px solid var(--accent);
+    border-radius:14px; padding:22px 24px; margin:6px 0 8px;
+  }
+  .pick .star {
+    font-family:var(--mono); font-weight:700; color:var(--ground);
+    background:var(--accent); width:40px; height:40px; border-radius:10px;
+    display:flex; align-items:center; justify-content:center; font-size:1.1rem;
+  }
+  .pick h2 { margin:0 0 6px; }
+  .pick h2 small {
+    font-family:var(--mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--accent); border:1px solid var(--accent); border-radius:5px;
+    padding:2px 7px; margin-left:10px; vertical-align:middle; font-weight:700;
+  }
+  .pick p { margin:0; color:var(--ink); font-size:.96rem; }
+
+  section { padding:34px 0; }
+  .tablewrap { overflow-x:auto; border:1px solid var(--border); border-radius:14px; background:var(--surface); }
+  table { border-collapse:collapse; width:100%; min-width:760px; font-size:.92rem; }
+  thead th {
+    text-align:left; font-family:var(--mono); font-size:.66rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--faint); font-weight:600;
+    padding:15px 18px; border-bottom:1px solid var(--border); background:var(--surface-2);
+    position:sticky; top:0;
+  }
+  tbody td { padding:15px 18px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--muted); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.name { color:var(--ink); font-weight:650; width:20%; }
+  td.uc { color:var(--ink); }
+  td.ex { font-family:var(--mono); font-size:.82rem; color:var(--faint); white-space:nowrap; }
+  tr.sel td { background:var(--accent-soft); }
+  tr.sel td.name { color:var(--accent); }
+  tr.sel td.name .badge {
+    display:inline-block; font-family:var(--mono); font-size:.58rem; letter-spacing:.08em;
+    text-transform:uppercase; background:var(--accent); color:var(--ground);
+    border-radius:4px; padding:1px 6px; margin-top:6px; font-weight:700;
+  }
+
+  .why { margin-top:8px; }
+  .why ul { margin:0; padding:0; list-style:none; display:grid; gap:10px; }
+  .why li { padding-left:24px; position:relative; color:var(--muted); }
+  .why li::before { content:"→"; position:absolute; left:0; color:var(--accent); font-weight:700; }
+  .why li strong { color:var(--ink); }
+
+  .foot { padding:34px 0 60px; color:var(--faint); font-family:var(--mono); font-size:.76rem; letter-spacing:.03em; }
+  .foot span { color:var(--muted); }
+
+  @media print {
+    :root { --ground:#FFF; --surface:#FFF; --surface-2:#F4F6F8; --ink:#0E1620; --muted:#3B4652; --border:#CBD3DA; }
+    header.hero { padding:0 0 16px; } section { padding:16px 0; }
+    .tablewrap, tr, .pick { break-inside:avoid; } table { min-width:0; font-size:11px; }
+    td.ex { white-space:normal; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <span class="tag"><span class="dot"></span> Prepared for review &nbsp;·&nbsp; AI Agent Research</span>
+    <h1>AI Agent Types &mdash; and a practical use case for each.</h1>
+    <p class="lead">A survey of the main categories of AI agents, what each one does, and a real-world problem it solves. The final row marks the type selected to build for this project.</p>
+  </header>
+
+  <section style="padding-top:6px">
+    <div class="pick">
+      <div class="star">&#9733;</div>
+      <div>
+        <h2>Selected to build: Autonomous DevOps / Deployment Agent <small>Our pick</small></h2>
+        <p>Codename <strong>Helmsman</strong> &mdash; an AI agent that takes a developer's finished app and gets it running live on Kubernetes (modern cloud infrastructure): it prepares everything, checks it, deploys it, returns a working link, then keeps monitoring and auto-fixing problems &mdash; all in full view. It solves a painful, high-value, everyday problem, and has a clear, demonstrable success condition: <strong>the app goes live and stays healthy.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">The list</span>
+    <h2 style="margin-bottom:16px">13 agent types, each with a practical use case</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Agent type</th>
+            <th>What it does</th>
+            <th>Practical use case</th>
+            <th>Real example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Conversational Assistant</td>
+            <td>Chats and answers questions in natural language.</td>
+            <td class="uc">Deflect common customer questions on a website 24/7.</td>
+            <td class="ex">ChatGPT, Intercom Fin</td>
+          </tr>
+          <tr>
+            <td class="name">Knowledge (RAG) Agent</td>
+            <td>Answers using your private documents, not just general knowledge.</td>
+            <td class="uc">Instant answers over internal HR &amp; policy documents.</td>
+            <td class="ex">Glean, Notion AI</td>
+          </tr>
+          <tr>
+            <td class="name">Coding Agent</td>
+            <td>Writes, reviews, and fixes software code.</td>
+            <td class="uc">Automatically fix a failing test and open a pull request.</td>
+            <td class="ex">Claude Code, Devin</td>
+          </tr>
+          <tr class="sel">
+            <td class="name">DevOps / Deployment Agent<br><span class="badge">&#9733; Selected</span></td>
+            <td>Deploys and operates apps on cloud infrastructure; monitors and self-heals.</td>
+            <td class="uc">Deploy an app to Kubernetes with no infrastructure expertise, and keep it healthy.</td>
+            <td class="ex">Helmsman (this project)</td>
+          </tr>
+          <tr>
+            <td class="name">SRE / Monitoring Agent</td>
+            <td>Watches live systems, detects incidents, and responds.</td>
+            <td class="uc">Detect a crash automatically and roll back to a working version.</td>
+            <td class="ex">PagerDuty AIOps, Cleric</td>
+          </tr>
+          <tr>
+            <td class="name">Workflow Automation Agent</td>
+            <td>Runs multi-step business processes across tools.</td>
+            <td class="uc">New-employee onboarding: accounts, access, and scheduling in one flow.</td>
+            <td class="ex">Lindy, Zapier AI</td>
+          </tr>
+          <tr>
+            <td class="name">Research Agent</td>
+            <td>Gathers, cross-checks, and summarises information from many sources.</td>
+            <td class="uc">Produce a competitor or market-research brief with sources.</td>
+            <td class="ex">Perplexity, Deep Research</td>
+          </tr>
+          <tr>
+            <td class="name">Data Analysis Agent</td>
+            <td>Turns plain questions into queries, charts, and insights.</td>
+            <td class="uc">Ask a sales question in English, get a live dashboard back.</td>
+            <td class="ex">Julius, Hex Magic</td>
+          </tr>
+          <tr>
+            <td class="name">Customer Support Agent</td>
+            <td>Resolves support tickets end to end, escalating when needed.</td>
+            <td class="uc">Handle tier-1 support fully, hand hard cases to a human.</td>
+            <td class="ex">Sierra, Decagon</td>
+          </tr>
+          <tr>
+            <td class="name">Browser / Computer-Use Agent</td>
+            <td>Operates websites and apps like a person would.</td>
+            <td class="uc">Fill web forms, run repetitive web tasks, or test a site.</td>
+            <td class="ex">Claude computer use, Operator</td>
+          </tr>
+          <tr>
+            <td class="name">Sales / Outreach Agent</td>
+            <td>Finds and qualifies leads, drafts personalised outreach.</td>
+            <td class="uc">Personalised cold email at scale, with follow-ups.</td>
+            <td class="ex">11x, Artisan</td>
+          </tr>
+          <tr>
+            <td class="name">Security Agent</td>
+            <td>Scans for vulnerabilities and responds to threats.</td>
+            <td class="uc">Automated security review of new code before release.</td>
+            <td class="ex">Socket, Snyk AI</td>
+          </tr>
+          <tr>
+            <td class="name">Multi-Agent Orchestrator</td>
+            <td>Coordinates several specialist agents toward one goal.</td>
+            <td class="uc">Split a complex task across specialists and combine results.</td>
+            <td class="ex">CrewAI, AutoGen</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Why this pick</span>
+    <h2>Why the DevOps / Deployment Agent is the right one to build</h2>
+    <div class="why">
+      <ul>
+        <li><strong>Solves a real, painful problem.</strong> Deploying to Kubernetes normally needs a scarce specialist &mdash; most developers get stuck at the last step.</li>
+        <li><strong>Clear, demonstrable success.</strong> Either the app is live and healthy, or it isn't. Easy to show working, easy to measure.</li>
+        <li><strong>High business value.</strong> It removes a bottleneck, reduces reliance on rare experts, and speeds up every release.</li>
+        <li><strong>Naturally fits an agent design.</strong> It combines several agent ideas above &mdash; a coordinator, monitoring, and problem-diagnosis &mdash; into one practical product.</li>
+        <li><strong>Safe to scope.</strong> It can start small (deploy one app locally) and grow in clear phases, so there is something working early.</li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>AI Agent Types</span> &mdash; research summary &nbsp;·&nbsp; Selected build: DevOps / Deployment Agent (Helmsman) &nbsp;·&nbsp; Examples are illustrative and current as of preparation
+  </div>
+</div>
+</body>
+</html>

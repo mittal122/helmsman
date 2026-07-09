@@ -1,0 +1,290 @@
+<title>Helmsman — AI Deployment Platform Overview</title>
+<style>
+  :root {
+    --ground:#F6F8FA; --surface:#FFFFFF; --surface-2:#EDF2F5;
+    --ink:#111A22; --muted:#54626F; --faint:#8593A0; --border:#E1E8ED;
+    --accent:#0F766E; --accent-2:#0B5C55; --accent-soft:#D6ECEA;
+    --good:#15803D; --warn:#B45309; --crit:#B91C1C;
+    --mono: ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0D1319; --surface:#141D26; --surface-2:#1B2731;
+      --ink:#E9EFF3; --muted:#93A1AD; --faint:#6E7D89; --border:#25323D;
+      --accent:#2DD4BF; --accent-2:#5EEAD4; --accent-soft:#123531;
+      --good:#34D399; --warn:#FBBF24; --crit:#F87171;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#F6F8FA; --surface:#FFFFFF; --surface-2:#EDF2F5;
+    --ink:#111A22; --muted:#54626F; --faint:#8593A0; --border:#E1E8ED;
+    --accent:#0F766E; --accent-2:#0B5C55; --accent-soft:#D6ECEA;
+    --good:#15803D; --warn:#B45309; --crit:#B91C1C;
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1319; --surface:#141D26; --surface-2:#1B2731;
+    --ink:#E9EFF3; --muted:#93A1AD; --faint:#6E7D89; --border:#25323D;
+    --accent:#2DD4BF; --accent-2:#5EEAD4; --accent-soft:#123531;
+    --good:#34D399; --warn:#FBBF24; --crit:#F87171;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:860px; margin:0 auto; padding:0 24px; }
+  .col { max-width:720px; }
+
+  .eyebrow {
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+    display:inline-block; margin:0 0 14px;
+  }
+  h1 {
+    font-size:clamp(2.1rem,6vw,3.3rem); line-height:1.05; letter-spacing:-.02em;
+    font-weight:800; margin:0 0 20px; text-wrap:balance;
+  }
+  h2 {
+    font-size:clamp(1.4rem,3.5vw,1.9rem); line-height:1.15; letter-spacing:-.01em;
+    font-weight:750; margin:0 0 8px; text-wrap:balance;
+  }
+  h3 { font-size:1.06rem; font-weight:700; margin:0 0 6px; letter-spacing:-.005em; }
+  p { margin:0 0 16px; color:var(--muted); }
+  p.lead { font-size:1.22rem; line-height:1.5; color:var(--ink); font-weight:400; }
+  strong { color:var(--ink); font-weight:650; }
+  section { padding:56px 0; border-top:1px solid var(--border); }
+  section:first-of-type { border-top:none; }
+
+  /* Hero */
+  .hero { padding:80px 0 60px; }
+  .hero .tag {
+    display:inline-flex; gap:8px; align-items:center;
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); border:1px solid var(--border); border-radius:999px;
+    padding:5px 12px; margin-bottom:26px; background:var(--surface);
+  }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
+
+  /* Live-events strip — the transparency motif */
+  .stream {
+    margin-top:34px; background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; overflow:hidden;
+  }
+  .stream .bar {
+    display:flex; gap:6px; align-items:center; padding:11px 16px;
+    border-bottom:1px solid var(--border); background:var(--surface-2);
+  }
+  .stream .bar b { font-family:var(--mono); font-size:.68rem; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--faint); font-weight:600; margin-left:6px; }
+  .tl { width:11px; height:11px; border-radius:50%; }
+  .tl.r{background:#E5533C22;border:1px solid #E5533C88}
+  .tl.y{background:#E5A93C22;border:1px solid #E5A93C88}
+  .tl.g{background:#3CB07822;border:1px solid #3CB07888}
+  .stream pre {
+    margin:0; padding:16px; font-family:var(--mono); font-size:.82rem; line-height:1.9;
+    color:var(--ink); overflow-x:auto; white-space:pre;
+  }
+  .stream .k { color:var(--accent); }
+  .stream .m { color:var(--faint); }
+
+  /* Pipeline diagram */
+  .pipe { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:6px 2px 14px; }
+  .stepbox {
+    flex:0 0 auto; min-width:120px; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; padding:14px 15px; position:relative;
+  }
+  .stepbox .n { font-family:var(--mono); font-size:.7rem; color:var(--accent); font-weight:600; }
+  .stepbox .t { font-weight:650; color:var(--ink); font-size:.94rem; margin-top:3px; }
+  .stepbox .d { font-size:.8rem; color:var(--muted); margin-top:2px; }
+  .arrow { flex:0 0 auto; align-self:center; color:var(--faint); padding:0 10px; font-size:1.1rem; }
+
+  /* Cards */
+  .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin-top:8px; }
+  .card {
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:22px 22px;
+  }
+  .card .ic {
+    width:34px; height:34px; border-radius:8px; background:var(--accent-soft);
+    display:flex; align-items:center; justify-content:center; margin-bottom:14px;
+    color:var(--accent); font-family:var(--mono); font-weight:700; font-size:.95rem;
+  }
+  .card p { margin:0; font-size:.94rem; }
+
+  /* Timeline */
+  .phase { display:grid; grid-template-columns:auto 1fr; gap:18px; align-items:start; }
+  .phase + .phase { margin-top:2px; }
+  .rail { display:flex; flex-direction:column; align-items:center; }
+  .pn {
+    width:34px; height:34px; border-radius:50%; flex:0 0 auto;
+    border:1.5px solid var(--accent); color:var(--accent); background:var(--surface);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-weight:700; font-size:.85rem;
+  }
+  .phase.now .pn { background:var(--accent); color:var(--ground); }
+  .line { width:1.5px; flex:1; background:var(--border); min-height:22px; margin:4px 0; }
+  .phase .body { padding-bottom:22px; }
+  .phase .body h3 span {
+    font-family:var(--mono); font-size:.68rem; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--faint); font-weight:600; margin-left:8px;
+  }
+  .phase .body p { margin:2px 0 0; font-size:.94rem; }
+  .badge-now {
+    font-family:var(--mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase;
+    background:var(--accent); color:var(--ground); border-radius:5px; padding:2px 7px;
+    font-weight:700; vertical-align:middle; margin-left:8px;
+  }
+
+  /* value / bottom */
+  .kpis { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:10px; }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .kpi b { display:block; font-size:1.55rem; letter-spacing:-.01em; color:var(--ink); font-weight:750; }
+  .kpi span { font-size:.9rem; color:var(--muted); }
+
+  .foot { padding:40px 0 60px; color:var(--faint); font-family:var(--mono); font-size:.76rem; letter-spacing:.03em; }
+  .foot span { color:var(--muted); }
+
+  @media (max-width:620px) {
+    .cards, .kpis { grid-template-columns:1fr; }
+    section { padding:44px 0; }
+  }
+  @media (prefers-reduced-motion:no-preference) {
+    .stepbox, .card { transition:border-color .2s ease; }
+  }
+</style>
+
+<div class="wrap col">
+  <header class="hero">
+    <span class="tag"><span class="dot"></span> Product Overview &nbsp;·&nbsp; Working name: Helmsman</span>
+    <h1>An AI teammate that puts your app live &mdash; safely, and in full view.</h1>
+    <p class="lead">Helmsman takes a developer's finished application and does the entire job of getting it running on modern cloud infrastructure: it prepares everything, checks it, deploys it, hands back a working link, and then keeps watching and fixing problems &mdash; while showing every single step as it happens.</p>
+
+    <div class="stream" aria-label="Example of the live activity the user sees">
+      <div class="bar">
+        <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+        <b>Live activity &mdash; nothing hidden</b>
+      </div>
+<pre><span class="m">10:24:01</span> <span class="k">generated</span> deployment file  <span class="m">(reviewed & valid)</span>
+<span class="m">10:24:03</span> <span class="k">checked</span>   configuration      <span class="m">no issues found</span>
+<span class="m">10:24:05</span> <span class="k">deploying</span> to cluster        <span class="m">2 of 2 copies ready</span>
+<span class="m">10:24:11</span> <span class="k">live</span>      https://your-app.example.com  <span class="m">healthy ✓</span></pre>
+    </div>
+  </header>
+
+  <section>
+    <span class="eyebrow">The problem</span>
+    <h2>Getting an app live today needs a specialist most teams don't have.</h2>
+    <p>Modern applications run on a system called <strong>Kubernetes</strong> &mdash; powerful, but genuinely hard to operate. It normally takes a dedicated infrastructure engineer to write the dozens of setup files, deploy them correctly, and keep the app healthy afterwards.</p>
+    <p>That means developers who have <em>already built</em> a working app get stuck at the last step. Teams wait on scarce experts, deployments are done by hand (which is slow and error-prone), and when something breaks at 3am, someone has to be paged to read cryptic errors.</p>
+    <p><strong>Helmsman removes that bottleneck.</strong> It does the specialist's job automatically, guides the developer in plain language, and never asks them to understand the machinery underneath.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">What the developer experiences</span>
+    <h2>Answer a few questions. Get a live link. Keep peace of mind.</h2>
+    <p>From the user's side it's simple. Helmsman walks them through a short, guided flow &mdash; suggesting sensible answers at every step so they never need infrastructure knowledge &mdash; then does the heavy lifting itself.</p>
+
+    <div class="pipe" role="list" aria-label="The deployment steps, in order">
+      <div class="stepbox" role="listitem"><div class="n">01</div><div class="t">Set up</div><div class="d">Help package the app</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">02</div><div class="t">Collect</div><div class="d">A few guided questions</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">03</div><div class="t">Prepare</div><div class="d">Write all setup files</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">04</div><div class="t">Check</div><div class="d">Catch mistakes first</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">05</div><div class="t">Deploy</div><div class="d">Put it live</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">06</div><div class="t">Confirm</div><div class="d">Return the link</div></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stepbox" role="listitem"><div class="n">07</div><div class="t">Watch</div><div class="d">Monitor & auto-fix</div></div>
+    </div>
+    <p style="margin-top:18px">Crucially, it doesn't stop at step 6. After the app is live, Helmsman <strong>keeps monitoring it</strong> and steps in when something goes wrong.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">What makes it different</span>
+    <h2>Not just a deploy button. A transparent, careful engineer.</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="ic">&#9673;</div>
+        <h3>Completely transparent</h3>
+        <p>Every file it writes, every command it runs, every decision it makes is shown live on screen. It is never a black box &mdash; the user always knows exactly what is happening and why.</p>
+      </div>
+      <div class="card">
+        <div class="ic">&#9758;</div>
+        <h3>Guided for non-experts</h3>
+        <p>At each step it suggests sensible defaults and explains them in plain English. A developer with no infrastructure background can deploy confidently; an expert can still control every detail.</p>
+      </div>
+      <div class="card">
+        <div class="ic">&#9863;</div>
+        <h3>Two ways to run</h3>
+        <p><strong>Manual</strong>: it asks for approval before each important action. <strong>Autonomous</strong>: it runs the whole thing itself &mdash; while still showing everything &mdash; and pauses only for anything risky.</p>
+      </div>
+      <div class="card">
+        <div class="ic">&#10227;</div>
+        <h3>Self-healing &amp; safe</h3>
+        <p>If the app crashes or misbehaves, it detects the cause, explains it simply, and can automatically recover or roll back to the last working version &mdash; with built-in limits so it never does anything destructive on its own.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">How it works, simply</span>
+    <h2>A small team of specialists, coordinated by one lead.</h2>
+    <p>Rather than one giant program, Helmsman works like an experienced deployment team. A <strong>coordinator</strong> runs the process and hands each job to the right specialist: one prepares the setup files, one checks them, one deploys, one watches the app's health, and one diagnoses problems and explains fixes in plain language.</p>
+    <p>The important design choice: <strong>artificial intelligence is used only where real judgement or explanation is needed</strong> &mdash; guiding the user, and understanding failures. The parts that actually touch the live system are built on <strong>proven, industry-standard tools</strong>, not reinvented. That keeps the platform predictable, safe, and trustworthy &mdash; the AI advises, it never improvises with your live systems.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">What we're building</span>
+    <h2>Delivered in clear phases, each one usable on its own.</h2>
+    <p>The design is complete. Development is planned in stages so there is something working and demonstrable early, with capability added on top step by step.</p>
+
+    <div style="margin-top:26px">
+      <div class="phase now">
+        <div class="rail"><div class="pn">1</div><div class="line"></div></div>
+        <div class="body"><h3>Working core <span class="badge-now">Building next</span></h3>
+          <p>The full journey end to end &mdash; collect details, prepare, check, deploy to a real cluster, show every step live, and return the link. Proves the whole idea works.</p></div>
+      </div>
+      <div class="phase">
+        <div class="rail"><div class="pn">2</div><div class="line"></div></div>
+        <div class="body"><h3>Complete setup &amp; controls <span>manual approval</span></h3>
+          <p>Full range of configuration, secure handling of passwords and keys, and the approve-each-step mode.</p></div>
+      </div>
+      <div class="phase">
+        <div class="rail"><div class="pn">3</div><div class="line"></div></div>
+        <div class="body"><h3>Live monitoring <span>health &amp; logs</span></h3>
+          <p>Continuous health, resource usage, and log tracking, with automatic detection of common failures.</p></div>
+      </div>
+      <div class="phase">
+        <div class="rail"><div class="pn">4</div><div class="line"></div></div>
+        <div class="body"><h3>The AI guidance layer <span>explain &amp; advise</span></h3>
+          <p>Plain-language setup help, smart suggested settings, and clear explanations of any problem with a recommended fix.</p></div>
+      </div>
+      <div class="phase">
+        <div class="rail"><div class="pn">5</div><div class="line"></div></div>
+        <div class="body"><h3>Hands-off &amp; hardened <span>autonomous &amp; secure</span></h3>
+          <p>Fully autonomous mode, automatic recovery and rollback, and the security work needed for real-world, multi-user use.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Why it matters</span>
+    <h2>The bottom line.</h2>
+    <div class="kpis">
+      <div class="kpi"><b>Faster</b><span>Apps go live in minutes, without waiting on a specialist.</span></div>
+      <div class="kpi"><b>Fewer experts</b><span>Any developer can deploy &mdash; no deep infrastructure skills required.</span></div>
+      <div class="kpi"><b>Safer</b><span>Everything checked before it runs, watched after, and reversible.</span></div>
+    </div>
+    <p style="margin-top:22px">In short: Helmsman turns a specialist, error-prone, days-long task into a guided, transparent, minutes-long one &mdash; and then keeps the app healthy for you.</p>
+  </section>
+
+  <div class="foot">
+    <span>Helmsman</span> &mdash; AI Kubernetes Deployment Platform &nbsp;·&nbsp; Product overview &nbsp;·&nbsp; Status: design complete, development starting &nbsp;·&nbsp; Working name, subject to change
+  </div>
+</div>

@@ -84,6 +84,13 @@ docs/superpowers/specs/  the design spec
 `tools/` = deterministic / no LLM. `agents/` = LLM / never touches cluster directly.
 This split IS the architecture. (Spec §15.4)
 
+**Prompts are externalized in `prompts/`** — the AI control surface. Every LLM
+agent loads `prompts/_system.md` (shared safety rules) + its own file
+(`onboarding.md`, `config-advisor.md`, `error-resolution.md`), fills
+`{{placeholders}}`, and requests the structured JSON at the bottom of each file.
+Edit behavior there, not in code. The safety rules in `_system.md` encode the
+invariants above — do not remove them.
+
 ## Phase 0 scope (the next build — walking skeleton, NO LLM)
 
 Containerized-yes path → config form (static defaults) → render `values.yaml` →
