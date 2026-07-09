@@ -34,6 +34,11 @@
     <button id="btn-reject" style="background:#f87171">Reject</button>
   </div>
   <div id="log"></div>
+  <div id="monitor" style="display:none;margin-top:12px;padding:10px;border:1px solid #25323d;border-radius:8px">
+    <b>Monitoring</b> <button id="btn-stop" style="background:#f87171;float:right">Stop</button>
+    <div id="failures" style="color:#f87171;margin:6px 0"></div>
+    <div id="metrics" style="font-family:monospace;font-size:.8rem;color:#93a4b3"></div>
+  </div>
 <script>
   function kv(s){ const o={}; (s||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(p=>{const i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);}); return o; }
   let currentName = "";
@@ -59,9 +64,19 @@
       document.getElementById("approve-msg").textContent = e.message + " ";
       approveBar.style.display = "block";
     }
+    if (e.type === "health") {
+      document.getElementById("monitor").style.display = "block";
+      const met = document.getElementById("metrics");
+      met.textContent = (e.data.metrics || []).map(m => `${m.pod}  cpu ${m.cpu}  mem ${m.memory}`).join("\n");
+      const fl = document.getElementById("failures");
+      fl.textContent = (e.data.failures || []).map(f => `⚠ ${f.type} on ${f.pod}`).join("\n");
+    }
   };
   document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
+  document.getElementById("btn-stop").onclick = () =>
+    fetch("/monitor/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name: currentName})});
   document.getElementById("f").onsubmit = async (ev) => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
