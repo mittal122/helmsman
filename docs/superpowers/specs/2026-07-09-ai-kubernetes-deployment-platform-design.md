@@ -51,10 +51,18 @@ non-determinism for no benefit.
 | Health monitoring (SRE) | Prometheus alert rules + Loki queries | **No** — detection is deterministic |
 | Error resolution | Read failure events/logs → explain → generate fix-prompt | **Yes** ✅ |
 | Onboarding | Generate containerization prompt for the user's own AI assistant | **Yes** ✅ |
+| Config-advisor | Suggest sane deployment config (port/replicas/resources/probes) + explain each, for the user to confirm | **Yes** ✅ |
 
-**LLM is used in exactly three places:** (a) containerization-prompt generation,
-(b) failure root-cause explanation + fix-prompt generation, (c) coordinator
-planning within a stage. Everything else is deterministic tooling.
+**LLM is used in exactly four places:** (a) containerization-prompt generation,
+(b) config-advisor suggestions in the Collect stage, (c) failure root-cause
+explanation + fix-prompt generation, (d) coordinator planning within a stage.
+Everything else is deterministic tooling.
+
+**Config-advisor safety:** its output is a *suggestion the user confirms*, never
+applied directly. The user edits/approves values → the deterministic template
+renders the final manifest. The LLM never writes final YAML. A wrong guess is
+harmless (human gate before deploy; monitoring + error-resolution self-correct
+after, e.g. OOMKilled → "bump memory" fix-prompt).
 
 ---
 
@@ -116,6 +124,10 @@ predictable and testable.
    ChatGPT, etc.) to produce a Dockerfile. Platform does not build the image for
    them in v1; it verifies an image reference exists before proceeding.
 2. **Collect (app)** — name, image, namespace, port, replicas, deployment mode.
+   The **config-advisor** LLM reads what it can infer (image, Dockerfile `EXPOSE`,
+   framework hints) and pre-fills sane defaults with a plain-language reason for
+   each; the user confirms or edits. This is where "guide the user" actually
+   happens. Phase 0–1 ship with static defaults; the advisor enriches in Phase 3.
 3. **Collect (config)** — env vars, `.env` values, secrets, key-value config.
    **Secrets are redacted in the event stream from the moment they are entered.**
 4. **Generate** — render all manifests from templates with best-practice defaults
@@ -255,7 +267,8 @@ Each phase ships something runnable. Local `kind` throughout v1.
   Live metrics + logs in the UI.
 
 - **Phase 3 — LLM layer (thin).**
-  Containerization-prompt generator; failure root-cause explanation + fix-prompt
+  Containerization-prompt generator; config-advisor (infers + suggests + explains
+  deployment config, user confirms); failure root-cause explanation + fix-prompt
   from real events. Prompt-injection guardrails (§7.2).
 
 - **Phase 4 — Autonomous mode + rollback.**
