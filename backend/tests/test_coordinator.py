@@ -452,3 +452,21 @@ def test_cluster_selection_sets_and_cleans_kubeconfig(monkeypatch, tmp_path):
     assert seen["name"] == "prod"
     assert seen["kubeconfig"] == fake                 # env pointed at decrypted file during deploy
     assert not _os.path.exists(fake)                  # unlinked in finally
+
+@pytest.mark.asyncio
+async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
+    def _boom(name):
+        raise KeyError("nope")
+    monkeypatch.setattr(coordinator.kubeconfig_store, "decrypt_to_tempfile", _boom)
+
+    bus = EventBus()
+    q = bus.subscribe()
+    # must not raise out of run() even though /deploy calls it via fire-and-forget create_task
+    await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
+                           "port": 8080, "replicas": 2, "cluster": "unknown"},
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "error" in types

@@ -80,11 +80,13 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_exit", rstage, "Done")
 
     kubeconfig_tmp = None
-    cluster = cfg.get("cluster") or ""
-    if cluster:
-        kubeconfig_tmp = await asyncio.to_thread(kubeconfig_store.decrypt_to_tempfile, cluster)
-        os.environ["KUBECONFIG"] = kubeconfig_tmp   # ponytail: global; single-deploy by design (§status). Per-deploy env if concurrency added.
+    prev_kubeconfig = os.environ.get("KUBECONFIG")
     try:
+        cluster = cfg.get("cluster") or ""
+        if cluster:
+            kubeconfig_tmp = await asyncio.to_thread(kubeconfig_store.decrypt_to_tempfile, cluster)
+            os.environ["KUBECONFIG"] = kubeconfig_tmp   # ponytail: global; single-deploy by design (§status). Per-deploy env if concurrency added.
+
         # Detect capabilities and disable what the cluster can't serve
         current = "Detect"
         await emit("stage_enter", "Detect", "Checking cluster capabilities")
@@ -192,7 +194,10 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("error", current, f"Unexpected error: {e}")
     finally:
         if kubeconfig_tmp:
-            os.environ.pop("KUBECONFIG", None)
+            if prev_kubeconfig is not None:
+                os.environ["KUBECONFIG"] = prev_kubeconfig
+            else:
+                os.environ.pop("KUBECONFIG", None)
             try:
                 os.unlink(kubeconfig_tmp)
             except OSError:

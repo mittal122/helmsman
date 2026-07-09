@@ -87,3 +87,11 @@ def test_kubeconfig_crud(monkeypatch):
     assert r.json()["names"] == ["prod"]
     r = client.delete("/kubeconfigs/prod")
     assert r.json()["ok"] is True
+
+def test_delete_kubeconfig_rejects_bad_name(monkeypatch):
+    called = {"n": False}
+    monkeypatch.setattr(main.kubeconfig_store, "delete", lambda n: called.update(n=True))
+    client = TestClient(main.app)
+    r = client.delete("/kubeconfigs/Bad_Name")   # uppercase/underscore fails RFC1123, stays a single path segment
+    assert r.status_code == 400
+    assert called["n"] is False

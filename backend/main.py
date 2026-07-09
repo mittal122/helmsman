@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import re
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator, Field
 import auth
@@ -148,7 +148,11 @@ async def list_kubeconfigs():
 
 @app.delete("/kubeconfigs/{name}", dependencies=[Depends(auth.require_token)])
 async def delete_kubeconfig(name: str):
-    return {"ok": kubeconfig_store.delete(_dns1123(name))}
+    try:
+        valid = _dns1123(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": kubeconfig_store.delete(valid)}
 
 @app.get("/events")
 async def events():
