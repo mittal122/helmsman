@@ -36,3 +36,13 @@ def get_endpoint(name: str, namespace: str, port: int) -> dict:
         "port": port,
         "port_forward": f"kubectl port-forward -n {namespace} svc/{name} {port}:{port}",
     }
+
+def detect_capabilities() -> dict:
+    ic = subprocess.run(["kubectl", "get", "ingressclass", "-o", "name"],
+                        capture_output=True, text=True)
+    ms = subprocess.run(["kubectl", "get", "apiservices", "v1beta1.metrics.k8s.io"],
+                        capture_output=True, text=True)
+    return {
+        "ingress_controller": ic.returncode == 0 and bool(ic.stdout.strip()),
+        "metrics_server": ms.returncode == 0,
+    }
