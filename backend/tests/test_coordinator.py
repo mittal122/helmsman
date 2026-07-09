@@ -3,6 +3,7 @@ import pytest
 from events import EventBus
 import coordinator
 import approvals as approvals_mod
+import monitors as monitors_mod
 
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
@@ -15,9 +16,10 @@ async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
 
     bus = EventBus()
     q = bus.subscribe()
+    mons = monitors_mod.Monitors(); mons.stop("app")
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2, "mode": "autonomous"},
-                          bus, approvals_mod.Approvals())
+                          bus, approvals_mod.Approvals(), mons)
 
     events = []
     while not q.empty():
@@ -40,7 +42,8 @@ async def test_validation_failure_stops_before_deploy(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals())
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors())
 
     assert installed["called"] is False
     types = []
@@ -64,7 +67,7 @@ async def test_rollout_timeout_emits_error(monkeypatch):
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2, "mode": "autonomous"},
-                          bus, approvals_mod.Approvals())
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors())
 
     types = []
     while not q.empty():
@@ -81,7 +84,8 @@ async def test_exception_surfaced_as_error(monkeypatch):
     bus = EventBus()
     q = bus.subscribe()
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
-                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals())
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors())
 
     events = []
     while not q.empty():
@@ -113,7 +117,8 @@ async def test_manual_mode_waits_for_approval_then_deploys(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "install",
                         lambda cfg: installed.__setitem__("called", True))
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr))
+    mons = monitors_mod.Monitors(); mons.stop("app")
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, mons))
     await asyncio.sleep(0.05)
     assert installed["called"] is False           # blocked pending approval
     assert appr.resolve("app", True) is True       # approve
@@ -127,7 +132,7 @@ async def test_manual_reject_stops_before_deploy(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "install",
                         lambda cfg: installed.__setitem__("called", True))
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr))
+    task = asyncio.create_task(coordinator.run(_cfg(), bus, appr, monitors_mod.Monitors()))
     await asyncio.sleep(0.05)
     appr.resolve("app", False)
     await task
@@ -139,7 +144,8 @@ async def test_manual_reject_stops_before_deploy(monkeypatch):
 async def test_autonomous_mode_skips_gate(monkeypatch):
     _stub_tools(monkeypatch)
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    await coordinator.run(_cfg(mode="autonomous"), bus, appr)
+    mons = monitors_mod.Monitors(); mons.stop("app")
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
     types = [ (await q.get()).type for _ in range(q.qsize()) ]
     assert "endpoint" in types and "approval_required" not in types
 
@@ -149,9 +155,29 @@ async def test_secret_values_are_redacted_in_events(monkeypatch):
     monkeypatch.setattr(coordinator.manifests, "render",
                         lambda cfg: "stringData:\n  TOKEN: s3cret")
     bus = EventBus(); q = bus.subscribe(); appr = approvals_mod.Approvals()
-    await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr)
+    mons = monitors_mod.Monitors(); mons.stop("app")
+    await coordinator.run(_cfg(mode="autonomous", secrets={"TOKEN": "s3cret"}), bus, appr, mons)
     dumped = ""
     while not q.empty():
         dumped += str((await q.get()).to_dict())
     assert "s3cret" not in dumped
     assert "••••" in dumped
+
+@pytest.mark.asyncio
+async def test_monitor_stage_emits_health_and_stops(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.monitor, "detect_failures",
+                        lambda n, ns: [{"pod": "p", "container": "app",
+                                        "type": "CrashLoopBackOff", "message": "x"}])
+    monkeypatch.setattr(coordinator.monitor, "get_metrics",
+                        lambda n, ns: [{"pod": "p", "cpu": "5m", "memory": "40Mi"}])
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    bus = EventBus(); q = bus.subscribe()
+    appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
+    mons.stop("app")   # stop immediately so the loop runs exactly one cycle then exits
+    await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons)
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "health" in types
+    assert "failure" in types      # the injected CrashLoopBackOff surfaced

@@ -8,10 +8,12 @@ from pydantic import BaseModel, field_validator
 from events import EventBus
 from coordinator import run as coordinator_run
 from approvals import Approvals
+from monitors import Monitors
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
 approvals = Approvals()
+monitors = Monitors()
 _bg_tasks: set = set()
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -54,7 +56,7 @@ class ApproveRequest(BaseModel):
 
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
-    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals))
+    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return {"deployment_id": req.name}

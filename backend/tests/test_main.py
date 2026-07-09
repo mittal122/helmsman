@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 import main
 
 def test_deploy_accepts_config_and_returns_id(monkeypatch):
-    async def fake_run(cfg, bus, approvals):
+    async def fake_run(cfg, bus, approvals, monitors):
         return None
     monkeypatch.setattr(main, "coordinator_run", fake_run)
     client = TestClient(main.app)

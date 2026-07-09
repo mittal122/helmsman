@@ -1,13 +1,16 @@
 import asyncio
 from events import Event, EventBus
-from tools import manifests, validate, deploy
+from tools import manifests, validate, deploy, monitor
 from approvals import Approvals
+from monitors import Monitors
 import guardrails
 
 ROLLOUT_TIMEOUT_S = 120
 POLL_INTERVAL_S = 2
+MONITOR_INTERVAL_S = 5
+MONITOR_MAX_CYCLES = 720   # safety cap (~1h at 5s); real stop is the Monitors flag
 
-async def run(cfg: dict, bus: EventBus, approvals: Approvals) -> None:
+async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors) -> None:
     name, ns = cfg["name"], cfg.get("namespace", "default")
     port = int(cfg.get("port", 8080))
     mode = cfg.get("mode", "manual")
@@ -94,5 +97,23 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals) -> None:
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
         await emit("endpoint", "Verify", "Deployment is live", ep)
         await emit("stage_exit", "Verify", "Done")
+
+        # Monitor (continuous, stoppable)
+        current = "Monitor"
+        await emit("stage_enter", "Monitor", "Monitoring deployment")
+        # note: no monitors.start(name) here — a caller may have pre-stopped this
+        # monitor (or another run for the same name) and calling start() would
+        # silently clear that flag before the loop's own is_stopped check runs.
+        for _ in range(MONITOR_MAX_CYCLES):
+            failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
+            metrics = await asyncio.to_thread(monitor.get_metrics, name, ns)
+            await emit("health", "Monitor", "Health snapshot",
+                       {"failures": failures, "metrics": metrics})
+            for f in failures:
+                await emit("failure", "Monitor", f"{f['type']} on {f['pod']}", f)
+            if monitors.is_stopped(name):
+                break
+            await asyncio.sleep(MONITOR_INTERVAL_S)
+        await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:
         await emit("error", current, f"Unexpected error: {e}")
