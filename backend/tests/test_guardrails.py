@@ -19,3 +19,15 @@ def test_redact_replaces_in_nested_structures():
 
 def test_redact_noop_without_variants():
     assert guardrails.redact({"a": "b"}, set()) == {"a": "b"}
+
+def test_redact_handles_bytes_and_tuple():
+    v = guardrails.secret_variants({"T": "s3cret"})
+    out = guardrails.redact({"b": b"has s3cret", "t": ("s3cret", "clean")}, v)
+    assert "s3cret" not in str(out)
+    assert "••••" in out["b"]
+    assert isinstance(out["t"], tuple) and out["t"][1] == "clean"
+
+def test_redact_redacts_dict_keys():
+    v = guardrails.secret_variants({"T": "s3cret"})
+    out = guardrails.redact({"s3cret": "x"}, v)
+    assert "s3cret" not in str(out)
