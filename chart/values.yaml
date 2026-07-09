@@ -10,3 +10,16 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+env: {}
+secrets: {}
+ingress:
+  enabled: false
+  host: ""
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPU: 80
+pdb:
+  enabled: false
+  minAvailable: 1

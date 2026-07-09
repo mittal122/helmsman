@@ -28,6 +28,15 @@ spec:
           image: {{ .Values.image | quote }}
           ports:
             - containerPort: {{ .Values.port }}
+          envFrom:
+{{- if .Values.env }}
+            - configMapRef:
+                name: {{ .Values.name }}-config
+{{- end }}
+{{- if .Values.secrets }}
+            - secretRef:
+                name: {{ .Values.name }}-secret
+{{- end }}
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu | quote }}

@@ -1,4 +1,4 @@
 {{- define "app.labels" -}}
 app.kubernetes.io/name: {{ .Values.name }}
-app.kubernetes.io/managed-by: helmsman
+helmsman.dev/managed-by: helmsman
 {{- end -}}
