@@ -54,6 +54,9 @@ class ApproveRequest(BaseModel):
     name: str
     approved: bool = True
 
+class MonitorStopRequest(BaseModel):
+    name: str
+
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors))
@@ -64,6 +67,11 @@ async def deploy(req: DeployRequest):
 @app.post("/approve")
 async def approve(req: ApproveRequest):
     return {"ok": approvals.resolve(req.name, req.approved)}
+
+@app.post("/monitor/stop")
+async def monitor_stop(req: MonitorStopRequest):
+    monitors.stop(req.name)
+    return {"ok": True}
 
 @app.get("/events")
 async def events():

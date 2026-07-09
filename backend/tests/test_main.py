@@ -30,3 +30,11 @@ def test_approve_resolves(monkeypatch):
     r = client.post("/approve", json={"name": "demo", "approved": True})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert called == {"k": "demo", "a": True}
+
+def test_monitor_stop(monkeypatch):
+    called = {}
+    monkeypatch.setattr(main.monitors, "stop", lambda k: called.setdefault("k", k))
+    client = TestClient(main.app)
+    r = client.post("/monitor/stop", json={"name": "demo"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert called["k"] == "demo"
