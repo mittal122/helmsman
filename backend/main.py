@@ -1,16 +1,26 @@
 import asyncio
 import json
 import os
+import re
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from events import EventBus
 from coordinator import run as coordinator_run
+from approvals import Approvals
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
+approvals = Approvals()
 _bg_tasks: set = set()
 STATIC = os.path.join(os.path.dirname(__file__), "static")
+
+_RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+def _dns1123(v: str) -> str:
+    if not _RFC1123.match(v) or len(v) > 63:
+        raise ValueError("must be a valid RFC1123 name (lowercase alphanumeric/-, no leading -)")
+    return v
 
 class DeployRequest(BaseModel):
     name: str
@@ -18,13 +28,40 @@ class DeployRequest(BaseModel):
     namespace: str = "default"
     port: int = 8080
     replicas: int = 2
+    mode: str = "manual"
+    env: dict[str, str] = {}
+    secrets: dict[str, str] = {}
+    ingress_host: str = ""
+    hpa_enabled: bool = False
+    hpa_min: int = 2
+    hpa_max: int = 5
+    hpa_cpu: int = 80
+
+    @field_validator("name", "namespace")
+    @classmethod
+    def _valid_name(cls, v): return _dns1123(v)
+
+    @field_validator("image")
+    @classmethod
+    def _valid_image(cls, v):
+        if v.startswith("-") or any(c.isspace() for c in v):
+            raise ValueError("invalid image reference")
+        return v
+
+class ApproveRequest(BaseModel):
+    name: str
+    approved: bool = True
 
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
-    task = asyncio.create_task(coordinator_run(req.model_dump(), bus))
+    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return {"deployment_id": req.name}
+
+@app.post("/approve")
+async def approve(req: ApproveRequest):
+    return {"ok": approvals.resolve(req.name, req.approved)}
 
 @app.get("/events")
 async def events():
