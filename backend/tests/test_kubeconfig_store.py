@@ -46,5 +46,6 @@ def test_rejects_trailing_newline_name(store):
         store.save("prod\n", b"x")
 
 def test_data_dir_mode_0700(store, tmp_path):
+    os.chmod(str(tmp_path), 0o777)  # loosen first so save() must re-tighten it
     store.save("prod", b"x")
     assert oct(tmp_path.stat().st_mode)[-3:] == "700"
