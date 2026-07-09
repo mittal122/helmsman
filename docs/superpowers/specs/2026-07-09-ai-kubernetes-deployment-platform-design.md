@@ -200,10 +200,15 @@ controller + DNS/TLS — **detected**, not assumed).
    input. An attacker or noisy dependency can embed instructions in a log line.
    The LLM may *explain* cluster text; it may **never gate an action on it**.
    All cluster-sourced text is data, never instructions.
-3. **Kubeconfig / credentials are crown jewels.** v1 targets local `kind`, which
-   sidesteps stored-cloud-credential risk. When cloud clusters arrive (Phase 5):
-   encryption at rest, short-lived scoped tokens, least-privilege ServiceAccount
-   (never cluster-admin), per-user isolation.
+3. **Kubeconfig / credentials are crown jewels.** Phase 5 auth is a **single
+   operator token** (`AUTH_TOKEN` env var; every mutating endpoint requires
+   `Authorization: Bearer <token>`; default-open when unset, for local/dev use) —
+   not per-user accounts. Named kubeconfigs are shared across the operator but
+   **encrypted at rest** (Fernet, key from `KUBECONFIG_ENC_KEY`) and decrypted
+   only to a `0600` temp file for the duration of an active deploy, then removed.
+   Least-privilege ServiceAccount (never cluster-admin) still applies. Per-user
+   multi-tenancy (separate credentials/RBAC per human operator) is **deferred** —
+   known limitation, revisit if/when multiple operators share one deployment.
 4. **Destructive-op gate** — see §5.
 5. **Cost control** — Prometheus detects (deterministic, free); the LLM is
    invoked only on a fired alert. Metrics are never streamed into an LLM.
@@ -258,7 +263,9 @@ reinvented.
 
 - Cloud clusters, cloud auth, stored cloud credentials (Phase 5).
 - Building the container image for the user (v1 only verifies an image ref).
-- Multi-tenancy / user auth (Phase 5).
+- Full multi-user auth / OIDC / per-user RBAC. Phase 5 shipped a single
+  operator-token gate (`AUTH_TOKEN`) on mutating endpoints — sufficient for one
+  operator, not a multi-tenant identity system.
 - Canary / blue-green progressive rollout (later).
 - GitOps reconciliation (adopt Argo/Flux later if needed, do not build).
 
@@ -297,7 +304,7 @@ Each phase ships something runnable. Local `kind` throughout v1.
   Revision tracking, auto-remediation with circuit breaker, destructive-op gate.
 
 - **Phase 5 — Hardening.**
-  Auth, multi-tenant kubeconfig isolation + encryption, cloud clusters, image /
+  Operator-token auth, encrypted-at-rest kubeconfig store, cloud clusters, image /
   policy scanning, cost estimation.
 
 ---

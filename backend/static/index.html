@@ -27,11 +27,14 @@
     <pre id="ca-out" style="white-space:pre-wrap;color:#93a4b3"></pre>
   </details>
   <form id="f">
+    <input id="token" type="password" placeholder="operator token (optional)">
     <input name="name" placeholder="name" value="demo" required>
     <input name="image" placeholder="image" value="mendhak/http-https-echo:31" required>
     <input name="namespace" placeholder="namespace" value="default">
     <input name="port" placeholder="port" value="8080" type="number">
     <input name="replicas" placeholder="replicas" value="2" type="number">
+    <input name="cluster" list="cluster-list" placeholder="cluster (blank = local kind)">
+    <datalist id="cluster-list"></datalist>
     <select name="mode"><option value="manual">Manual</option><option value="autonomous">Autonomous</option></select>
     <span style="margin-left:8px">
       <input id="rb-rev" type="number" placeholder="rev" style="width:60px">
@@ -56,6 +59,23 @@
   function kv(s){ const o={}; (s||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(p=>{const i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);}); return o; }
   let currentName = "";
   let currentNamespace = "default";
+  const tokenEl = document.getElementById("token");
+  tokenEl.value = localStorage.getItem("helmsman_token") || "";
+  tokenEl.addEventListener("change", () => localStorage.setItem("helmsman_token", tokenEl.value));
+  function authHeaders(extra) {
+    const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
+    if (tokenEl.value) h["Authorization"] = "Bearer " + tokenEl.value;
+    return h;
+  }
+  fetch("/kubeconfigs", { headers: authHeaders() }).then(r => r.ok ? r.json() : null).then(d => {
+    if (!d || !d.names) return;
+    document.getElementById("cluster-list").textContent = "";
+    d.names.forEach(n => {
+      const opt = document.createElement("option");
+      opt.value = n;
+      document.getElementById("cluster-list").appendChild(opt);
+    });
+  }).catch(() => {});
   const log = document.getElementById("log");
   const approveBar = document.getElementById("approve");
   const es = new EventSource("/events");
@@ -97,11 +117,26 @@
       div.textContent = (e.type === "escalation" ? "⚠ " : "↩ ") + e.message;
       log.appendChild(div);
     }
+    if (e.type === "scan") {
+      const line = document.createElement("div");
+      line.className = "ev endpoint";
+      const img = e.data.image || {};
+      line.textContent = `🔍 scan: ${e.message}` +
+        (img.findings && img.findings.length ? " — " +
+          img.findings.slice(0, 5).map(f => `${f.severity} ${f.id} (${f.pkg})`).join(", ") : "");
+      log.appendChild(line);
+    }
+    if (e.type === "cost") {
+      const line = document.createElement("div");
+      line.className = "ev endpoint";
+      line.textContent = `💰 ${e.message} (cpu $${e.data.breakdown.cpu_usd} + mem $${e.data.breakdown.mem_usd})`;
+      log.appendChild(line);
+    }
   };
-  document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
-  document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
+  document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
+  document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
   document.getElementById("btn-stop").onclick = () =>
-    fetch("/monitor/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+    fetch("/monitor/stop", {method:"POST", headers:authHeaders(),
       body: JSON.stringify({name: currentName})});
   document.getElementById("rb-btn").onclick = () => {
     const rev = parseInt(document.getElementById("rb-rev").value, 10);
@@ -109,18 +144,18 @@
       alert("Enter a valid revision number");
       return;
     }
-    fetch("/rollback", {method:"POST", headers:{"Content-Type":"application/json"},
+    fetch("/rollback", {method:"POST", headers:authHeaders(),
       body: JSON.stringify({name: currentName, namespace: currentNamespace,
                             revision: rev})});
   };
   document.getElementById("ob-btn").onclick = async () => {
-    const r = await fetch("/onboard", {method:"POST",headers:{"Content-Type":"application/json"},
+    const r = await fetch("/onboard", {method:"POST",headers:authHeaders(),
       body: JSON.stringify({app_description: document.getElementById("ob-desc").value})});
     const d = await r.json();
     document.getElementById("ob-out").textContent = d.containerization_prompt || JSON.stringify(d);
   };
   document.getElementById("ca-btn").onclick = async () => {
-    const r = await fetch("/advise-config", {method:"POST",headers:{"Content-Type":"application/json"},
+    const r = await fetch("/advise-config", {method:"POST",headers:authHeaders(),
       body: JSON.stringify({name: document.getElementById("ca-name").value, image: document.getElementById("ca-image").value})});
     const d = await r.json();
     document.getElementById("ca-out").textContent =
@@ -131,11 +166,12 @@
     const fd = new FormData(ev.target);
     currentName = fd.get("name");
     currentNamespace = fd.get("namespace") || "default";
-    await fetch("/deploy", { method:"POST", headers:{"Content-Type":"application/json"},
+    await fetch("/deploy", { method:"POST", headers:authHeaders(),
       body: JSON.stringify({
         name: fd.get("name"), image: fd.get("image"), namespace: fd.get("namespace"),
         port: Number(fd.get("port")), replicas: Number(fd.get("replicas")),
         mode: fd.get("mode"), env: kv(fd.get("env")), secrets: kv(fd.get("secrets")),
+        cluster: fd.get("cluster") || "",
       })});
   };
 </script>

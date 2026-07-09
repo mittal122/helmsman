@@ -101,6 +101,10 @@ async def test_exception_surfaced_as_error(monkeypatch):
 def _stub_tools(monkeypatch):
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
+    monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
+        "available": False, "ok": True, "findings": [], "summary": "stub"})
+    monkeypatch.setattr(coordinator.scan, "scan_config", lambda manifests: {
+        "available": False, "ok": True, "findings": [], "summary": "stub"})
     monkeypatch.setattr(coordinator.deploy, "detect_capabilities",
                         lambda: {"ingress_controller": True, "metrics_server": True})
     monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)
@@ -427,3 +431,72 @@ async def test_breaker_tripped_freezes(monkeypatch):
     while not q.empty():
         types.append((await q.get()).type)
     assert "escalation" in types  # frozen by the breaker
+
+def test_cluster_selection_sets_and_cleans_kubeconfig(monkeypatch, tmp_path):
+    import coordinator, kubeconfig_store, os as _os
+    fake = str(tmp_path / "decrypted.kubeconfig")
+    open(fake, "w").write("x")
+    seen = {}
+    monkeypatch.setattr(kubeconfig_store, "decrypt_to_tempfile",
+                        lambda name: (seen.__setitem__("name", name), fake)[1])
+    # capture KUBECONFIG visible to a downstream tool call
+    monkeypatch.setattr(coordinator.deploy, "detect_capabilities",
+                        lambda: seen.__setitem__("kubeconfig", _os.environ.get("KUBECONFIG")) or
+                                {"ingress_controller": False, "metrics_server": False})
+    # short-circuit the rest of the pipeline after Detect
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: (_ for _ in ()).throw(RuntimeError("stop after detect")))
+    import asyncio
+    from events import EventBus
+    from approvals import Approvals
+    from monitors import Monitors
+    from breakers import Breaker
+    asyncio.run(coordinator.run({"name": "demo", "cluster": "prod"},
+                                EventBus(), Approvals(), Monitors(), Breaker()))
+    assert seen["name"] == "prod"
+    assert seen["kubeconfig"] == fake                 # env pointed at decrypted file during deploy
+    assert not _os.path.exists(fake)                  # unlinked in finally
+
+@pytest.mark.asyncio
+async def test_scan_gate_blocks_deploy_on_critical_finding(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
+        "available": True, "ok": False,
+        "findings": [{"id": "CVE-1", "severity": "CRITICAL", "pkg": "openssl", "title": "bad"}],
+        "summary": "1 vuln(s) at/above CRITICAL"})
+    monkeypatch.setattr(coordinator.scan, "scan_config", lambda manifests: {
+        "available": True, "ok": True, "findings": [], "summary": "0 misconfig(s) (advisory)"})
+    installed = {"called": False}
+    monkeypatch.setattr(coordinator.deploy, "install",
+                        lambda cfg: installed.__setitem__("called", True))
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg_auto(), bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    types = [e.type for e in events]
+    assert installed["called"] is False   # gate blocked Deploy
+    assert "scan" in types
+    assert "error" in types
+    err = next(e for e in events if e.type == "error")
+    assert err.stage == "Scan"
+    assert "endpoint" not in types
+
+@pytest.mark.asyncio
+async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
+    def _boom(name):
+        raise KeyError("nope")
+    monkeypatch.setattr(coordinator.kubeconfig_store, "decrypt_to_tempfile", _boom)
+
+    bus = EventBus()
+    q = bus.subscribe()
+    # must not raise out of run() even though /deploy calls it via fire-and-forget create_task
+    await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
+                           "port": 8080, "replicas": 2, "cluster": "unknown"},
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+
+    types = []
+    while not q.empty():
+        types.append((await q.get()).type)
+    assert "error" in types

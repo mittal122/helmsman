@@ -22,6 +22,11 @@ def test_rejects_non_rfc1123_name():
     r = client.post("/deploy", json={"name": "--evil", "image": "i:1"})
     assert r.status_code == 422
 
+def test_rejects_trailing_newline_name():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app\n", "image": "i:1"})
+    assert r.status_code == 422
+
 def test_approve_resolves(monkeypatch):
     called = {}
     monkeypatch.setattr(main.approvals, "resolve",
@@ -61,3 +66,32 @@ def test_rollback_endpoint(monkeypatch):
     r = client.post("/rollback", json={"name": "demo", "namespace": "default", "revision": 1})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert called == {"n": "demo", "ns": "default", "rev": 1}
+
+def test_deploy_401_when_token_set(monkeypatch):
+    monkeypatch.setenv("AUTH_TOKEN", "s3cret")
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app", "image": "i:1"})
+    assert r.status_code == 401
+
+def test_kubeconfig_crud(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(main.kubeconfig_store, "save", lambda n, raw: saved.update(n=n, raw=raw))
+    monkeypatch.setattr(main.kubeconfig_store, "list_names", lambda: ["prod"])
+    monkeypatch.setattr(main.kubeconfig_store, "delete", lambda n: True)
+    client = TestClient(main.app)
+    r = client.post("/kubeconfigs", json={"name": "prod", "content": "KCFG"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert saved["n"] == "prod" and saved["raw"] == b"KCFG"
+    assert "KCFG" not in r.text                       # content never echoed
+    r = client.get("/kubeconfigs")
+    assert r.json()["names"] == ["prod"]
+    r = client.delete("/kubeconfigs/prod")
+    assert r.json()["ok"] is True
+
+def test_delete_kubeconfig_rejects_bad_name(monkeypatch):
+    called = {"n": False}
+    monkeypatch.setattr(main.kubeconfig_store, "delete", lambda n: called.update(n=True))
+    client = TestClient(main.app)
+    r = client.delete("/kubeconfigs/Bad_Name")   # uppercase/underscore fails RFC1123, stays a single path segment
+    assert r.status_code == 400
+    assert called["n"] is False

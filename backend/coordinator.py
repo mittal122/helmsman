@@ -1,7 +1,9 @@
 import asyncio
+import os
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback
+from tools import manifests, validate, deploy, monitor, rollback, scan, cost
 import remediation
+import kubeconfig_store
 from breakers import Breaker
 from approvals import Approvals
 from monitors import Monitors
@@ -77,7 +79,14 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("escalation", rstage, f"Rollback failed: {e} — human needed")
         await emit("stage_exit", rstage, "Done")
 
+    kubeconfig_tmp = None
+    prev_kubeconfig = os.environ.get("KUBECONFIG")
     try:
+        cluster = cfg.get("cluster") or ""
+        if cluster:
+            kubeconfig_tmp = await asyncio.to_thread(kubeconfig_store.decrypt_to_tempfile, cluster)
+            os.environ["KUBECONFIG"] = kubeconfig_tmp   # ponytail: global; single-deploy by design (§status). Per-deploy env if concurrency added.
+
         # Detect capabilities and disable what the cluster can't serve
         current = "Detect"
         await emit("stage_enter", "Detect", "Checking cluster capabilities")
@@ -96,6 +105,9 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_enter", "Generate", "Rendering manifests via Helm")
         rendered = await asyncio.to_thread(manifests.render, cfg)
         await emit("manifest", "Generate", "Rendered manifests", {"yaml": rendered})
+        estimate = await asyncio.to_thread(cost.estimate, rendered)
+        await emit("cost", "Generate",
+                   f"Estimated ${estimate['monthly_usd']}/mo", estimate)
         await emit("stage_exit", "Generate", "Manifests ready")
 
         # Validate
@@ -122,6 +134,22 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         else:
             await emit("info", "Approve", "Autonomous mode — auto-approved")
             await emit("stage_exit", "Approve", "Approved")
+
+        # Scan (image vulns gate + advisory misconfig)
+        current = "Scan"
+        await emit("stage_enter", "Scan", "Scanning image and manifests")
+        img_scan = await asyncio.to_thread(scan.scan_image, cfg["image"])
+        cfg_scan = await asyncio.to_thread(scan.scan_config, rendered)
+        await emit("scan", "Scan", img_scan["summary"],
+                   {"image": img_scan, "config": cfg_scan})
+        if img_scan["available"] and not img_scan["ok"]:
+            await emit("error", "Scan",
+                       f"Image scan gate failed: {img_scan['summary']}",
+                       {"findings": img_scan["findings"]})
+            return
+        if not img_scan["available"]:
+            await emit("info", "Scan", "trivy not installed — image scan skipped (not a pass)")
+        await emit("stage_exit", "Scan", "Scan complete")
 
         # Deploy
         current = "Deploy"
@@ -183,3 +211,13 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:
         await emit("error", current, f"Unexpected error: {e}")
+    finally:
+        if kubeconfig_tmp:
+            if prev_kubeconfig is not None:
+                os.environ["KUBECONFIG"] = prev_kubeconfig
+            else:
+                os.environ.pop("KUBECONFIG", None)
+            try:
+                os.unlink(kubeconfig_tmp)
+            except OSError:
+                pass
