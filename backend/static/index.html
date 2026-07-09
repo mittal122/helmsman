@@ -1,1 +1,57 @@
-<!doctype html><title>Helmsman</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Helmsman</title>
+<style>
+  body { font-family: ui-monospace, Menlo, monospace; background:#0d1319; color:#e9eff3; margin:0; padding:24px; }
+  h1 { font-size:1.1rem; color:#2dd4bf; }
+  form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+  input { background:#141d26; border:1px solid #25323d; color:#e9eff3; padding:6px 8px; border-radius:6px; }
+  button { background:#2dd4bf; color:#0d1319; border:0; padding:6px 14px; border-radius:6px; font-weight:700; cursor:pointer; }
+  #log { background:#141d26; border:1px solid #25323d; border-radius:10px; padding:12px; height:60vh; overflow:auto; }
+  .ev { padding:3px 0; border-bottom:1px solid #1b2731; font-size:.85rem; }
+  .stage { color:#60a5fa; } .error { color:#f87171; } .endpoint { color:#34d399; }
+  .t { color:#647585; }
+</style>
+</head>
+<body>
+  <h1>⎈ Helmsman — live deployment</h1>
+  <form id="f">
+    <input name="name" placeholder="name" value="demo" required>
+    <input name="image" placeholder="image" value="mendhak/http-https-echo:31" required>
+    <input name="namespace" placeholder="namespace" value="default">
+    <input name="port" placeholder="port" value="8080" type="number">
+    <input name="replicas" placeholder="replicas" value="2" type="number">
+    <button type="submit">Deploy</button>
+  </form>
+  <div id="log"></div>
+<script>
+  const log = document.getElementById("log");
+  const es = new EventSource("/events");
+  es.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    const div = document.createElement("div");
+    div.className = "ev " + (e.type === "error" ? "error" : e.type === "endpoint" ? "endpoint" : e.type.startsWith("stage") ? "stage" : "");
+    const time = new Date(e.ts * 1000).toLocaleTimeString();
+    let extra = "";
+    if (e.type === "endpoint") extra = " → " + e.data.port_forward;
+    if (e.type === "error" && e.data.issues) extra = " → " + e.data.issues.join("; ");
+    div.innerHTML = `<span class="t">${time}</span> [${e.stage}] ${e.message}${extra}`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  };
+  document.getElementById("f").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    await fetch("/deploy", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        name: fd.get("name"), image: fd.get("image"), namespace: fd.get("namespace"),
+        port: Number(fd.get("port")), replicas: Number(fd.get("replicas")),
+      }),
+    });
+  };
+</script>
+</body>
+</html>
