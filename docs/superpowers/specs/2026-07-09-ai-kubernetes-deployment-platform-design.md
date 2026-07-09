@@ -199,8 +199,9 @@ controller + DNS/TLS — **detected**, not assumed).
 
 - **Postgres** — event store + deployment state + approvals + revision history.
   In-memory state loses the deployment on a crash; not acceptable.
-- **Revision history** — record each successful deploy as "known good" so
-  rollback has a target. Rollback is meaningless without it.
+- **Revision history** — provided by Helm (`helm history`); each successful
+  `helm upgrade` is a revision, and `helm rollback` restores a known-good one.
+  We do not build this ourselves.
 - **SSE (server-sent events)** — one-directional live stream to the UI. WebSocket
   only if bidirectional need appears (YAGNI until then).
 
@@ -223,7 +224,8 @@ everything" is structural, not per-feature work.
 |---|---|---|
 | Backend | FastAPI (Python) | Best Kubernetes client + LLM ecosystem |
 | Cluster access | official `kubernetes` Python client | Standard, typed, watch support |
-| Manifest gen | Helm or Jinja templates | Never LLM; templates render validated inputs |
+| Manifest gen | **Helm** (one fixed chart + generated `values.yaml`) | Never LLM. Rollback/revision/history free (`helm rollback`/`helm history`) — don't rebuild release mgmt. Transparency via `helm template`/`helm get manifest` streamed to UI |
+| LLM provider | **Claude** (Anthropic) | Onboarding, config-advisor, error-resolution |
 | Validation | `kubeconform` + `kubectl --dry-run=server` + `kube-score` | Deterministic, layered |
 | Monitoring | kube-prometheus-stack + Loki (helm) | Adopt, don't build |
 | State | Postgres | Durable event store + revisions |
@@ -297,8 +299,10 @@ Each phase ships something runnable. Local `kind` throughout v1.
 
 ## 14. Open questions for the next round
 
-1. LLM provider for Phase 3 (Claude default, given this platform).
-2. Helm vs. raw Jinja templates for manifest generation (leaning Helm — it also
-   gives us rollback/revision semantics for free).
-3. Whether Phase 2 monitoring is in-scope for the first implementation plan or
+Resolved: **LLM provider = Claude (Anthropic).** **Manifest gen = Helm** (one
+fixed chart + generated `values.yaml`; rollback/revision via `helm rollback`/
+`helm history`).
+
+Remaining:
+1. Whether Phase 2 monitoring is in-scope for the first implementation plan or
    deferred behind Phase 0–1.
