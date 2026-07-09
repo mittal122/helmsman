@@ -1,7 +1,9 @@
 import asyncio
+import os
 from events import Event, EventBus
 from tools import manifests, validate, deploy, monitor, rollback
 import remediation
+import kubeconfig_store
 from breakers import Breaker
 from approvals import Approvals
 from monitors import Monitors
@@ -77,6 +79,11 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("escalation", rstage, f"Rollback failed: {e} — human needed")
         await emit("stage_exit", rstage, "Done")
 
+    kubeconfig_tmp = None
+    cluster = cfg.get("cluster") or ""
+    if cluster:
+        kubeconfig_tmp = await asyncio.to_thread(kubeconfig_store.decrypt_to_tempfile, cluster)
+        os.environ["KUBECONFIG"] = kubeconfig_tmp   # ponytail: global; single-deploy by design (§status). Per-deploy env if concurrency added.
     try:
         # Detect capabilities and disable what the cluster can't serve
         current = "Detect"
@@ -183,3 +190,10 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:
         await emit("error", current, f"Unexpected error: {e}")
+    finally:
+        if kubeconfig_tmp:
+            os.environ.pop("KUBECONFIG", None)
+            try:
+                os.unlink(kubeconfig_tmp)
+            except OSError:
+                pass

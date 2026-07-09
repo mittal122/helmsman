@@ -427,3 +427,28 @@ async def test_breaker_tripped_freezes(monkeypatch):
     while not q.empty():
         types.append((await q.get()).type)
     assert "escalation" in types  # frozen by the breaker
+
+def test_cluster_selection_sets_and_cleans_kubeconfig(monkeypatch, tmp_path):
+    import coordinator, kubeconfig_store, os as _os
+    fake = str(tmp_path / "decrypted.kubeconfig")
+    open(fake, "w").write("x")
+    seen = {}
+    monkeypatch.setattr(kubeconfig_store, "decrypt_to_tempfile",
+                        lambda name: (seen.__setitem__("name", name), fake)[1])
+    # capture KUBECONFIG visible to a downstream tool call
+    monkeypatch.setattr(coordinator.deploy, "detect_capabilities",
+                        lambda: seen.__setitem__("kubeconfig", _os.environ.get("KUBECONFIG")) or
+                                {"ingress_controller": False, "metrics_server": False})
+    # short-circuit the rest of the pipeline after Detect
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: (_ for _ in ()).throw(RuntimeError("stop after detect")))
+    import asyncio
+    from events import EventBus
+    from approvals import Approvals
+    from monitors import Monitors
+    from breakers import Breaker
+    asyncio.run(coordinator.run({"name": "demo", "cluster": "prod"},
+                                EventBus(), Approvals(), Monitors(), Breaker()))
+    assert seen["name"] == "prod"
+    assert seen["kubeconfig"] == fake                 # env pointed at decrypted file during deploy
+    assert not _os.path.exists(fake)                  # unlinked in finally

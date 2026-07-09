@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator, Field
 import auth
+import kubeconfig_store
 from events import Event, EventBus
 from coordinator import run as coordinator_run
 from approvals import Approvals
@@ -43,6 +44,7 @@ class DeployRequest(BaseModel):
     hpa_min: int = 2
     hpa_max: int = 5
     hpa_cpu: int = 80
+    cluster: str = ""      # named kubeconfig from the store; "" = ambient (kind)
 
     @field_validator("name", "namespace")
     @classmethod
@@ -86,6 +88,14 @@ class OnboardRequest(BaseModel):
     port: int = 0
     notes: str = ""
 
+class KubeconfigRequest(BaseModel):
+    name: str
+    content: str
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v): return _dns1123(v)
+
 @app.post("/deploy", dependencies=[Depends(auth.require_token)])
 async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
@@ -126,6 +136,19 @@ async def advise_config(req: AdviseRequest):
 @app.post("/onboard", dependencies=[Depends(auth.require_token)])
 async def onboard(req: OnboardRequest):
     return await asyncio.to_thread(onboarding.generate, req.model_dump())
+
+@app.post("/kubeconfigs", dependencies=[Depends(auth.require_token)])
+async def add_kubeconfig(req: KubeconfigRequest):
+    kubeconfig_store.save(req.name, req.content.encode())
+    return {"ok": True}
+
+@app.get("/kubeconfigs", dependencies=[Depends(auth.require_token)])
+async def list_kubeconfigs():
+    return {"names": kubeconfig_store.list_names()}
+
+@app.delete("/kubeconfigs/{name}", dependencies=[Depends(auth.require_token)])
+async def delete_kubeconfig(name: str):
+    return {"ok": kubeconfig_store.delete(_dns1123(name))}
 
 @app.get("/events")
 async def events():
