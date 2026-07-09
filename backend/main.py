@@ -10,11 +10,14 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
+from tools import rollback
+from breakers import Breaker
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
 approvals = Approvals()
 monitors = Monitors()
+breakers = Breaker()
 _bg_tasks: set = set()
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -58,6 +61,11 @@ class ApproveRequest(BaseModel):
 class MonitorStopRequest(BaseModel):
     name: str
 
+class RollbackRequest(BaseModel):
+    name: str
+    namespace: str = "default"
+    revision: int
+
 class AdviseRequest(BaseModel):
     name: str = ""
     image: str = ""
@@ -75,10 +83,15 @@ class OnboardRequest(BaseModel):
 
 @app.post("/deploy")
 async def deploy(req: DeployRequest):
-    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors))
+    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     return {"deployment_id": req.name}
+
+@app.post("/rollback")
+async def rollback_endpoint(req: RollbackRequest):
+    await asyncio.to_thread(rollback.do_rollback, req.name, req.namespace, req.revision)
+    return {"ok": True}
 
 @app.post("/approve")
 async def approve(req: ApproveRequest):
