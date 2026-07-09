@@ -35,9 +35,13 @@
     div.className = "ev " + (e.type === "error" ? "error" : e.type === "endpoint" ? "endpoint" : e.type.startsWith("stage") ? "stage" : "");
     const time = new Date(e.ts * 1000).toLocaleTimeString();
     let extra = "";
-    if (e.type === "endpoint") extra = " → " + e.data.port_forward;
+    if (e.type === "endpoint") extra = " → " + (e.data.port_forward || "");
     if (e.type === "error" && e.data.issues) extra = " → " + e.data.issues.join("; ");
-    div.innerHTML = `<span class="t">${time}</span> [${e.stage}] ${e.message}${extra}`;
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = time;
+    div.appendChild(t);
+    div.appendChild(document.createTextNode(` [${e.stage}] ${e.message}${extra}`));
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
   };
