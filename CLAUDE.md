@@ -19,11 +19,27 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phase: DESIGN COMPLETE. No code written yet.** Next deliverable = Phase 0
-  implementation plan (via the `writing-plans` skill), then Phase 0 code.
-- Spec written + committed (4 commits, latest adds §15 Tech foundation).
-- **One open question (§14):** is Phase 2 monitoring in the first implementation
-  plan, or is Phase 0 built alone first? Recommendation on record: **Phase 0 alone.**
+- **Phase 0 COMPLETE + Phase 1 COMPLETE.** Both on `main`, pushed to
+  https://github.com/mittal122/helmsman (public). Backend suite 32/32; both
+  phases verified end-to-end on kind.
+- **Next deliverable = Phase 2 (monitoring):** deploy kube-prometheus-stack +
+  Loki, deterministic failure detection (CrashLoopBackOff/ImagePullBackOff/
+  OOMKilled/Pending), live metrics/logs in the UI. Plan via `writing-plans`,
+  build via `subagent-driven-development` (same loop as Phases 0–1).
+- **Phase 0 delivered:** FSM coordinator, event bus, SSE UI, Helm chart (§6
+  defaults), manifests/validate/deploy tools, deploy→kind→endpoint.
+- **Phase 1 delivered:** ConfigMap/Secret/Ingress/HPA/PDB templates, secret
+  redaction (single choke point in coordinator emit; raw+base64+helm-escaped
+  variants), manual approval gate + autonomous mode (`/approve` endpoint,
+  awaited Future), capability detection (auto-skip Ingress/HPA), kube-score gate
+  (with a documented ignore-list for conscious deviations), RFC1123 input
+  validation (closed the flag-injection finding), `helmsman.dev/managed-by` label.
+- **Deferred to Phase 2 (from Phase 1 final review):** kube-score ignore-list is
+  hand-maintained (brittle across versions); register approval Future BEFORE
+  emitting `approval_required` once `emit` gains async persistence (race guard);
+  approval timeout / orphaned-task cleanup; per-deployment EventBus + unique
+  deployment_id (currently single-deploy by design); env/secret key validation +
+  quoting `{{ $k }}` in ConfigMap/Secret templates; NetworkPolicy default-deny.
 
 ## Locked decisions — do NOT re-litigate without the user
 
