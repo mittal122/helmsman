@@ -12,7 +12,6 @@ async def run(cfg: dict, bus: EventBus) -> None:
     async def emit(type_, stage, message, data=None):
         await bus.publish(Event(type=type_, stage=stage, message=message, data=data or {}))
 
-    current = "Generate"
     try:
         # Generate
         current = "Generate"

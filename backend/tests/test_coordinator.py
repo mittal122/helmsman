@@ -80,7 +80,10 @@ async def test_exception_surfaced_as_error(monkeypatch):
     await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
                            "port": 8080, "replicas": 2}, bus)
 
-    types = []
+    events = []
     while not q.empty():
-        types.append((await q.get()).type)
+        events.append(await q.get())
+    types = [e.type for e in events]
     assert "error" in types
+    err = next(e for e in events if e.type == "error")
+    assert err.stage == "Generate"
