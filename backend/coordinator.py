@@ -1,6 +1,8 @@
 import asyncio
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor
+from tools import manifests, validate, deploy, monitor, rollback
+import remediation
+from breakers import Breaker
 from approvals import Approvals
 from monitors import Monitors
 from agents import error_resolver
@@ -11,7 +13,7 @@ POLL_INTERVAL_S = 2
 MONITOR_INTERVAL_S = 5
 MONITOR_MAX_CYCLES = 720   # safety cap (~1h at 5s); real stop is the Monitors flag
 
-async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors) -> None:
+async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors, breakers: Breaker) -> None:
     name, ns = cfg["name"], cfg.get("namespace", "default")
     port = int(cfg.get("port", 8080))
     mode = cfg.get("mode", "manual")
@@ -41,6 +43,39 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("explanation", current, f"Root cause: {result.get('root_cause','')}", result)
         except Exception as e:
             await emit("info", current, f"AI explanation unavailable: {e}")
+
+    async def remediate(reason):
+        rstage = "Remediate"
+        await emit("stage_enter", rstage, "Attempting auto-recovery")
+        if breakers.tripped(name):
+            await emit("escalation", rstage,
+                       "Circuit breaker tripped — auto-remediation frozen, human needed")
+            await emit("stage_exit", rstage, "Frozen")
+            return
+        revs = await asyncio.to_thread(rollback.get_revisions, name, ns)
+        prior = rollback.previous_good_revision(revs)
+        if prior is None:
+            await emit("escalation", rstage,
+                       "No prior good revision to roll back to — human needed")
+            await emit("stage_exit", rstage, "Escalated")
+            return
+        action = "rollback"
+        if remediation.is_destructive(action):   # rollback is safe; guards future actions
+            await emit("escalation", rstage,
+                       f"Action '{action}' is destructive — human-gated, not auto-run")
+            await emit("stage_exit", rstage, "Gated")
+            return
+        breakers.record(name)
+        await emit("remediation", rstage,
+                   f"Rolling back {name} to revision {prior} (cause: {reason})",
+                   {"revision": prior})
+        try:
+            await asyncio.to_thread(rollback.do_rollback, name, ns, prior)
+            await emit("remediation", rstage,
+                       f"Rolled back to revision {prior} — recovered", {"revision": prior})
+        except Exception as e:
+            await emit("escalation", rstage, f"Rollback failed: {e} — human needed")
+        await emit("stage_exit", rstage, "Done")
 
     try:
         # Detect capabilities and disable what the cluster can't serve
@@ -119,6 +154,8 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             await emit("error", "Verify", "Rollout did not complete in time",
                        {"timeout_s": ROLLOUT_TIMEOUT_S, "failures": failures})
+            if mode == "autonomous":
+                await remediate("rollout did not complete")
             return
 
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
