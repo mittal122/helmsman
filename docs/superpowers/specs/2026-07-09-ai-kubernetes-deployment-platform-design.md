@@ -48,7 +48,7 @@ non-determinism for no benefit.
 | Validation | `kubeconform` + `kubectl apply --dry-run=server` + `kube-score` | **No** |
 | Deployment | Kubernetes client `apply` + watch rollout | **No** |
 | Rollback | `kubectl rollout undo` / revision restore | **No** — one command |
-| Health monitoring (SRE) | Prometheus alert rules + Loki queries | **No** — detection is deterministic |
+| Health monitoring (SRE) | Pod status + events for detection; `kubectl top` (metrics-server) + `kubectl logs` for metrics/logs | **No** — detection is deterministic |
 | Error resolution | Read failure events/logs → explain → generate fix-prompt | **Yes** ✅ |
 | Onboarding | Generate containerization prompt for the user's own AI assistant | **Yes** ✅ |
 | Config-advisor | Suggest sane deployment config (port/replicas/resources/probes) + explain each, for the user to confirm | **Yes** ✅ |
@@ -242,7 +242,7 @@ everything" is structural, not per-feature work.
 | Manifest gen | **Helm** (one fixed chart + generated `values.yaml`) | Never LLM. Rollback/revision/history free (`helm rollback`/`helm history`) — don't rebuild release mgmt. Transparency via `helm template`/`helm get manifest` streamed to UI |
 | LLM provider | **Claude** (Anthropic) | Onboarding, config-advisor, error-resolution |
 | Validation | `kubeconform` + `kubectl --dry-run=server` + `kube-score` | Deterministic, layered |
-| Monitoring | kube-prometheus-stack + Loki (helm) | Adopt, don't build |
+| Monitoring (v1, local kind) | metrics-server (`kubectl top`) + `kubectl logs`; deterministic detection from pod status/events | Lightweight; the full kube-prometheus-stack + Loki is deferred to when historical queries/alert rules/dashboards are actually needed (cloud phase) |
 | State | Postgres | Durable event store + revisions |
 | Live stream | SSE | Simplest transport that fits |
 | Dev cluster | `kind` | No cloud cost, no credential risk |
@@ -278,10 +278,15 @@ Each phase ships something runnable. Local `kind` throughout v1.
   ConfigMap / Secret (redacted) / Ingress / HPA / PDB + best-practice defaults
   (§6) + manual approval mode + `kube-score`.
 
-- **Phase 2 — Monitoring.**
-  Deploy kube-prometheus-stack + Loki. Deterministic failure detection
-  (pod phase + events: CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending).
-  Live metrics + logs in the UI.
+- **Phase 2 — Monitoring (lightweight for local kind).**
+  Install metrics-server. Deterministic failure detection from pod status + events
+  (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending). Metrics via
+  `kubectl top`, logs via `kubectl logs`. A continuous (stoppable) Monitor stage
+  streams health/metrics/failure snapshots to the UI after Verify.
+  Rationale: pod status already carries the failure signals, and metrics-server +
+  kubectl deliver the same UI (health/CPU/mem/logs) far cheaper than the full
+  Prometheus/Loki stack, whose real value (history, alert rules, dashboards) this
+  phase doesn't use. Prometheus + Loki are adopted later when those are needed.
 
 - **Phase 3 — LLM layer (thin).**
   Containerization-prompt generator; config-advisor (infers + suggests + explains
