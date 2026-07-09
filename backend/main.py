@@ -4,8 +4,8 @@ import os
 import re
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
-from events import EventBus
+from pydantic import BaseModel, field_validator, Field
+from events import Event, EventBus
 from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
@@ -64,7 +64,7 @@ class MonitorStopRequest(BaseModel):
 class RollbackRequest(BaseModel):
     name: str
     namespace: str = "default"
-    revision: int
+    revision: int = Field(gt=0)
 
 class AdviseRequest(BaseModel):
     name: str = ""
@@ -90,7 +90,19 @@ async def deploy(req: DeployRequest):
 
 @app.post("/rollback")
 async def rollback_endpoint(req: RollbackRequest):
-    await asyncio.to_thread(rollback.do_rollback, req.name, req.namespace, req.revision)
+    # Manual rollback still emits to the event store — transparency invariant applies to
+    # every cluster mutation. No secret values on this path, so no redaction needed.
+    await bus.publish(Event(type="command", stage="Rollback",
+                            message=f"helm rollback {req.name} {req.revision}",
+                            data={"name": req.name, "namespace": req.namespace, "revision": req.revision}))
+    try:
+        await asyncio.to_thread(rollback.do_rollback, req.name, req.namespace, req.revision)
+    except Exception as e:
+        await bus.publish(Event(type="error", stage="Rollback", message=f"Manual rollback failed: {e}"))
+        return {"ok": False, "error": str(e)}
+    await bus.publish(Event(type="remediation", stage="Rollback",
+                            message=f"Rolled back {req.name} to revision {req.revision}",
+                            data={"revision": req.revision}))
     return {"ok": True}
 
 @app.post("/approve")
