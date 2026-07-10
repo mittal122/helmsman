@@ -20,6 +20,7 @@ import store
 
 FORWARD_TTL_S = 30          # a forward not heartbeated within this is reaped
 FORWARD_REAP_INTERVAL_S = 10
+COOKIE_SECURE = os.environ.get("COOKIE_INSECURE") != "1"   # Secure by default; set COOKIE_INSECURE=1 for local http
 
 logging.basicConfig(level=logging.INFO,
                     format='{"level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}')
@@ -224,7 +225,8 @@ async def login(req: LoginRequest):
     token = auth.make_token(u["email"], u["role"])
     await store.append_audit(u["email"], "login", u["email"], True)
     resp = JSONResponse({"token": token, "email": u["email"], "role": u["role"]})
-    resp.set_cookie("helmsman_session", token, httponly=True, samesite="lax", max_age=auth.JWT_TTL_S)
+    resp.set_cookie("helmsman_session", token, httponly=True, secure=COOKIE_SECURE,
+                    samesite="lax", max_age=auth.JWT_TTL_S)
     return resp
 
 @app.get("/auth/me")
@@ -234,7 +236,7 @@ async def me(user: dict = Depends(auth.current_user)):
 @app.post("/auth/logout")
 async def logout():
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("helmsman_session")
+    resp.delete_cookie("helmsman_session", httponly=True, secure=COOKIE_SECURE, samesite="lax")
     return resp
 
 @app.get("/users", dependencies=_RA)

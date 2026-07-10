@@ -54,6 +54,9 @@ Mounts your `~/.kube/config` read-only so it can reach your cluster.
 | `KUBECONFIG_ENC_KEY` | Fernet key enabling the encrypted kubeconfig store (multi-cluster). |
 | `DATABASE_URL` | Postgres DSN for the durable event store + audit log. Unset = in-memory. |
 | `KUBECONFIG` | Which cluster to manage (standard kube context). |
+| `JWT_SECRET` | Signing secret for session tokens (set a strong value in prod; defaults to `AUTH_TOKEN`). |
+| `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | Creates the first admin on empty DB. |
+| `COOKIE_INSECURE=1` | Allow the session cookie over plain http (local dev only). Default: Secure (HTTPS-only). |
 
 ## Endpoints (highlights)
 
