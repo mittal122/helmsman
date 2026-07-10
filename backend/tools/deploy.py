@@ -55,8 +55,13 @@ def get_replicas(name: str, namespace: str) -> tuple[int, int]:
         return (0, 0)
     if out.returncode != 0:
         return (0, 0)
-    status = json.loads(out.stdout).get("status", {})
-    return (int(status.get("readyReplicas", 0)), int(status.get("replicas", 0)))
+    obj = json.loads(out.stdout)
+    ready = int((obj.get("status") or {}).get("readyReplicas", 0))
+    # desired = spec.replicas (the true target). status.replicas is the current pod
+    # count, which dips during churn — using it lets a crash-looping rollout declare
+    # "live" prematurely (e.g. 1/1 when 3 were requested).
+    desired = int((obj.get("spec") or {}).get("replicas", 0))
+    return (ready, desired)
 
 def get_endpoint(name: str, namespace: str, port: int) -> dict:
     return {

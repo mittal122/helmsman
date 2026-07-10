@@ -134,6 +134,9 @@
   .track{height:7px;border-radius:6px;background:var(--panel-2);overflow:hidden} .fill{height:100%;border-radius:6px;transition:width .4s}
   .endpoint{padding:16px} .endpoint .lbl{font-family:var(--mono);font-size:.64rem;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);margin-bottom:6px}
   .endpoint .url{font-family:var(--mono);font-size:.82rem;color:var(--accent);word-break:break-all} .endpoint.pending .url{color:var(--faint);font-style:italic}
+  .endpoint .url a{color:var(--accent);font-weight:700;text-decoration:none} .endpoint .url a:hover{text-decoration:underline}
+  .epnote{font-family:var(--sans);font-size:.72rem;color:var(--muted);margin-top:5px}
+  .epcmd{font-family:var(--mono);font-size:.72rem;color:var(--faint);margin-top:6px;word-break:break-all}
   .empty{padding:16px;color:var(--faint);font-size:.82rem;font-family:var(--mono)}
 
   .approve{display:none;align-items:center;gap:14px;margin-top:14px;background:var(--panel);border:1px solid var(--accent);border-radius:14px;padding:14px 18px}
@@ -372,7 +375,13 @@
       var q=$("approve-q"); q.textContent=""; q.appendChild(el("b",null,"Approval needed. ")); q.appendChild(document.createTextNode(ev.message)); $("approve").classList.add("on"); setStatus("waiting","waiting for your approval"); }
     else if(t==="guidance"){ setStatus("waiting","blocked — fix needed (see console)"); }
     else if(t==="endpoint"){ setStage("Verify","done"); setStatus("live","live & healthy"); var d=ev.data||{};
-      $("ep").className="endpoint"; $("ep-url").textContent=(d.service?d.service+":"+d.port:ev.message)+(d.port_forward?"   ("+d.port_forward+")":""); nowBanner("Deployment","live",""); }
+      var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); u.textContent="";
+      var lbl=ep.querySelector(".lbl"); if(lbl) lbl.textContent = d.url ? "Open your app" : "Access via port-forward";
+      if(d.url){ var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
+        u.appendChild(el("div","epnote","auto port-forward running — click to open in a new tab")); }
+      else { u.appendChild(document.createTextNode(d.service?d.service+":"+d.port:ev.message)); }
+      if(d.port_forward){ u.appendChild(el("div","epcmd","$ "+d.port_forward)); }
+      nowBanner("Deployment","live",""); }
     else if(t==="rollout" && ev.data){ nowBanner("Deploy agent","applying manifests, watching rollout",(ev.data.ready||0)+" / "+(ev.data.desired||0)+" ready"); }
     else if(t==="manifest" && ev.data){ renderFiles(ev.data.yaml); }
     else if(t==="health"){ renderHealth(ev.data||{}); }

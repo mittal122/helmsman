@@ -33,3 +33,13 @@ def test_unreachable_when_kubectl_missing(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _boom)
     ok, detail = deploy.cluster_reachable()
     assert ok is False and "not installed" in detail
+
+def test_get_replicas_desired_is_spec_not_status(monkeypatch):
+    # desired must come from spec.replicas (the true target), not status.replicas
+    # (current pod count that dips during churn -> premature "live")
+    class _R:
+        returncode = 0
+        stdout = json.dumps({"spec": {"replicas": 3},
+                             "status": {"readyReplicas": 1, "replicas": 1}})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+    assert deploy.get_replicas("app", "ns") == (1, 3)  # 1 ready of 3 desired, not 1/1

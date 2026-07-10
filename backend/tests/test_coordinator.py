@@ -9,6 +9,7 @@ import breakers as breakers_mod
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
+    monkeypatch.setattr(coordinator.portforward, "start", lambda *a, **k: 12345)
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
     monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)
@@ -153,6 +154,8 @@ async def test_unreachable_cluster_fails_fast_with_error(monkeypatch):
 
 def _stub_tools(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "test"))
+    monkeypatch.setattr(coordinator.portforward, "start", lambda *a, **k: 12345)
+    monkeypatch.setattr(coordinator.portforward, "stop_all", lambda: None)
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
     monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
@@ -563,3 +566,32 @@ async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
     while not q.empty():
         types.append((await q.get()).type)
     assert "error" in types
+
+@pytest.mark.asyncio
+async def test_transient_crash_recovers_no_blocking_guidance(monkeypatch):
+    # a pod crash-loops during startup then recovers -> WARN only + "recovered" note +
+    # a genuinely-live endpoint with a clickable URL, and NO blocking guidance.
+    _stub_tools(monkeypatch)
+    reps = iter([(0, 3), (3, 3)])
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: next(reps, (3, 3)))
+    fails = iter([[{"pod": "p", "container": "c", "type": "CrashLoopBackOff", "message": "boom"}], []])
+    monkeypatch.setattr(coordinator.monitor, "detect_failures", lambda n, ns: next(fails, []))
+    monkeypatch.setattr(coordinator.monitor, "get_metrics", lambda n, ns: [])
+    monkeypatch.setattr(coordinator, "POLL_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    async def _ns(x): pass
+    monkeypatch.setattr(coordinator.asyncio, "sleep", _ns)
+    bus = EventBus(); q = bus.subscribe(); mons = monitors_mod.Monitors()
+    await coordinator.run(_cfg(mode="autonomous", replicas=3), bus,
+                          approvals_mod.Approvals(), mons, breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    types = [e.type for e in events]
+    assert "failure" in types          # transient crash surfaced as a warning
+    assert "guidance" not in types     # but NOT blocking guidance — it recovered
+    assert "endpoint" in types
+    ep = next(e for e in events if e.type == "endpoint")
+    assert ep.data.get("url", "").startswith("http://127.0.0.1:")   # clickable URL
+    assert any("recovered" in (e.message or "") for e in events)

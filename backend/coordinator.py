@@ -2,7 +2,7 @@ import asyncio
 import os
 import traceback
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback, scan, cost
+from tools import manifests, validate, deploy, monitor, rollback, scan, cost, portforward
 import remediation
 import diagnostics
 import kubeconfig_store
@@ -103,6 +103,11 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         except Exception as e:
             await emit("escalation", rstage, f"Rollback failed: {e} — human needed")
         await emit("stage_exit", rstage, "Done")
+
+    # a new deploy halts any prior deploy's monitor loop + port-forward (single-deploy
+    # design) so stale health/URLs from an earlier app don't bleed into this one.
+    monitors.stop_all()
+    await asyncio.to_thread(portforward.stop_all)
 
     kubeconfig_tmp = None
     prev_kubeconfig = os.environ.get("KUBECONFIG")
@@ -218,8 +223,10 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                 key = (f["pod"], f["type"])
                 if key not in seen_failures:
                     seen_failures.add(key)
+                    # WARN only — a pod may crash-loop transiently during startup and
+                    # still recover. Don't emit blocking "fix this" guidance here; that
+                    # comes only if the rollout ultimately fails (the timeout branch).
                     await emit("failure", "Verify", f"{f['type']} on {f['pod']}", f)
-                    await explain(f)
             if desired and ready >= desired:
                 break
             await asyncio.sleep(POLL_INTERVAL_S)
@@ -227,15 +234,25 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             await emit("error", "Verify", "Rollout did not complete in time",
                        {"timeout_s": ROLLOUT_TIMEOUT_S, "failures": failures})
+            # persistent failure -> actionable guidance (both modes)
+            await guide("Verify",
+                        [f"{f['type']} on {f['pod']}: {f.get('message','')}" for f in failures]
+                        or ["rollout did not reach the desired replica count in time"])
             if mode == "autonomous":
                 await remediate("rollout did not complete")
-            else:
-                await guide("Verify",
-                            [f"{f['type']} on {f['pod']}: {f.get('message','')}" for f in failures]
-                            or ["rollout did not reach the desired replica count in time"])
             return
 
+        # all desired replicas ready -> genuinely live
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
+        try:
+            lport = await asyncio.to_thread(portforward.start, name, ns, port)
+            ep["url"] = f"http://127.0.0.1:{lport}"
+        except Exception:
+            pass  # port-forward is best-effort; the service/port-forward cmd still shown
+        if seen_failures:
+            kinds = ", ".join(sorted({k[1] for k in seen_failures}))
+            await emit("info", "Verify",
+                       f"Pods hit {kinds} during startup but the rollout recovered — all {desired} replicas are ready.")
         await emit("endpoint", "Verify", "Deployment is live", ep)
         await emit("stage_exit", "Verify", "Done")
 
