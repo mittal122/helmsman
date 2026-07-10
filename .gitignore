@@ -6,3 +6,9 @@ __pycache__/
 backend/data/
 .bin/
 *.tar.gz
+
+# local-only docs / scratch (removed from GitHub, kept on the machine)
+CLAUDE.md
+docs/
+scripts/dev.sh
+scripts/kind-up.sh
