@@ -186,8 +186,16 @@
   }
 
   // ---- auth / RBAC ----
-  var myRole="viewer";
+  var myRole="admin";      // login-free default: full access when auth is disabled
   function showLogin(on){ $("authov").classList.toggle("on", on); }
+  async function authEnabled(){ try{ return (await (await fetch("/auth/enabled")).json()).enabled; }catch(_){ return false; } }
+  async function initAuth(){
+    if(!(await authEnabled())){          // login-free mode: hide every auth element
+      $("whoami").style.display="none"; $("logout-btn").style.display="none";
+      $("users-panel").style.display="none"; showLogin(false); myRole="admin"; return true;
+    }
+    return await checkAuth();
+  }
   async function checkAuth(){
     try{
       var r=await fetch("/auth/me",{headers:headers()});
@@ -419,7 +427,7 @@
     try{fetch("/forwards/stop",{method:"POST",headers:headers(),body:JSON.stringify({keys:keys}),keepalive:true});}catch(_){}
   });
 
-  checkAuth().then(function(ok){ if(ok) loadNamespaces(); });
+  initAuth().then(function(ok){ if(ok) loadNamespaces(); });
 })();
 </script>
 </body>

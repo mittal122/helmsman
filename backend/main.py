@@ -229,6 +229,13 @@ async def login(req: LoginRequest):
                     samesite="strict", max_age=auth.JWT_TTL_S)
     return resp
 
+@app.get("/auth/enabled")
+async def auth_enabled():
+    # is a login ever required? off in zero-config open-dev mode -> the UI hides all
+    # login chrome (personal use); on once you set AUTH_TOKEN or create users (selling).
+    enabled = await auth._auth_configured() or os.environ.get("ALLOW_OPEN_DEV") != "1"
+    return {"enabled": enabled}
+
 @app.get("/auth/me")
 async def me(user: dict = Depends(auth.current_user)):
     return {"email": user["email"], "role": user["role"]}

@@ -499,7 +499,12 @@
     localStorage.removeItem("helmsman_token");tokenEl.value="";
     $("whoami").style.display="none";$("logout-btn").style.display="none";showLogin(true);
   };
-  checkAuth();
+  async function initAuth(){
+    var en=false; try{ en=(await (await fetch("/auth/enabled")).json()).enabled; }catch(_){}
+    if(!en){ $("whoami").style.display="none";$("logout-btn").style.display="none";showLogin(false); return; }
+    checkAuth();
+  }
+  initAuth();
 })();
 </script>
 </body>

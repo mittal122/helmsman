@@ -2,6 +2,15 @@ from fastapi.testclient import TestClient
 import main
 import store
 
+def test_auth_disabled_in_open_mode(monkeypatch):
+    # personal use: no AUTH_TOKEN, no users -> login is OFF (UI hides all auth chrome)
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        assert c.get("/auth/enabled").json() == {"enabled": False}
+        # ...and once a user exists, auth turns ON
+        c.post("/users", json={"email": "a@b.com", "password": "password1", "role": "admin"})
+        assert c.get("/auth/enabled").json() == {"enabled": True}
+
 def test_rbac_multi_user_flow(monkeypatch):
     monkeypatch.delenv("AUTH_TOKEN", raising=False)
     monkeypatch.setattr(main.cluster, "list_namespaces", lambda: [{"name": "default", "status": "Active", "created": ""}])
