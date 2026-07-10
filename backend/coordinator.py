@@ -3,6 +3,7 @@ import os
 from events import Event, EventBus
 from tools import manifests, validate, deploy, monitor, rollback, scan, cost
 import remediation
+import diagnostics
 import kubeconfig_store
 from breakers import Breaker
 from approvals import Approvals
@@ -45,6 +46,23 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("explanation", current, f"Root cause: {result.get('root_cause','')}", result)
         except Exception as e:
             await emit("info", current, f"AI explanation unavailable: {e}")
+
+    async def guide(stage, issues):
+        # Self-healing "guide" rung: a break we can't auto-fix still gets clear,
+        # actionable guidance so the user knows exactly what to change. Deterministic
+        # catalog first (always works); LLM error-resolver enriches it best-effort.
+        g = diagnostics.diagnose(stage, issues)
+        try:
+            ctx = {"failure_type": f"{stage}Failed", "pod_status": "",
+                   "recent_events": "; ".join(str(i) for i in (issues if isinstance(issues, list) else [issues])),
+                   "recent_logs": "",
+                   "config_summary": f"{name} image={cfg.get('image','')} replicas={cfg.get('replicas','')}"}
+            ai = await asyncio.to_thread(error_resolver.resolve, ctx)
+            g["ai"] = {"root_cause": ai.get("root_cause", ""),
+                       "recommended_action": ai.get("recommended_action", "")}
+        except Exception:
+            pass  # no API key / LLM down — deterministic guidance still stands
+        await emit("guidance", stage, g["summary"], g)
 
     async def remediate(reason):
         rstage = "Remediate"
@@ -97,6 +115,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             target = ("cluster '" + cluster + "'") if cluster else "the local cluster"
             await emit("error", "Detect",
                        f"Can't reach {target}: {detail}. Check your kubeconfig/context and that the cluster is running.")
+            await guide("Detect", [f"connection to {target} failed: {detail}"])
             return
         await emit("info", "Detect", f"Cluster reachable ({detail})")
         caps = await asyncio.to_thread(deploy.detect_capabilities)
@@ -125,6 +144,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         ok, issues = await asyncio.to_thread(validate.validate, rendered, ns)
         if not ok:
             await emit("error", "Validate", "Validation failed", {"issues": issues})
+            await guide("Validate", issues)
             return
         await emit("stage_exit", "Validate", "Validation passed")
 
@@ -155,6 +175,9 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("error", "Scan",
                        f"Image scan gate failed: {img_scan['summary']}",
                        {"findings": img_scan["findings"]})
+            await guide("Scan", [img_scan["summary"]] +
+                        [f"{f.get('severity','')} {f.get('id','')} {f.get('pkg','')}"
+                         for f in img_scan["findings"][:5]])
             return
         if not img_scan["available"]:
             await emit("info", "Scan", "trivy not installed — image scan skipped (not a pass)")
@@ -193,6 +216,10 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                        {"timeout_s": ROLLOUT_TIMEOUT_S, "failures": failures})
             if mode == "autonomous":
                 await remediate("rollout did not complete")
+            else:
+                await guide("Verify",
+                            [f"{f['type']} on {f['pod']}: {f.get('message','')}" for f in failures]
+                            or ["rollout did not reach the desired replica count in time"])
             return
 
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
@@ -219,7 +246,11 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await asyncio.sleep(MONITOR_INTERVAL_S)
         await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:
-        await emit("error", current, f"Unexpected error: {e}")
+        try:
+            await emit("error", current, f"Unexpected error: {e}")
+            await guide(current, [f"internal error: {e}"])
+        except Exception:
+            pass
     finally:
         if kubeconfig_tmp:
             if prev_kubeconfig is not None:

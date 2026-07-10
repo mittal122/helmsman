@@ -57,6 +57,30 @@ async def test_validation_failure_stops_before_deploy(monkeypatch):
     assert "error" in types
 
 @pytest.mark.asyncio
+async def test_validation_failure_emits_actionable_guidance(monkeypatch):
+    # self-healing "guide" rung: a validation break the agent can't auto-fix must
+    # still emit clear, actionable guidance (deterministic, even with the LLM down)
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
+    monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "y")
+    monkeypatch.setattr(coordinator.validate, "validate",
+                        lambda m, ns: (False, ["kube-score: [CRITICAL] (apex) Image with latest tag"]))
+    monkeypatch.setattr(coordinator.error_resolver, "resolve",
+                        lambda ctx: (_ for _ in ()).throw(RuntimeError("no api key")))  # LLM down
+    bus = EventBus()
+    q = bus.subscribe()
+    await coordinator.run({"name": "apex", "image": "apex", "namespace": "default",
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    g = next(e for e in events if e.type == "guidance")
+    assert g.stage == "Validate"
+    item = g.data["items"][0]
+    assert item["problem"] == "Your image has no pinned version tag"
+    assert "version" in item["fix"].lower() and "1.4.2" in item["fix"]
+
+@pytest.mark.asyncio
 async def test_rollout_timeout_emits_error(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "y")

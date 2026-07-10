@@ -119,6 +119,24 @@
   .approve .no{background:transparent;border:1px solid #7a2d2d;color:var(--red)}
   @keyframes rise{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
 
+  /* guidance banner (self-healing "here's how to fix it") */
+  .guide{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:7;display:none;
+    background:linear-gradient(180deg,#132a2a,#0c1a1a);border:1px solid var(--tealdim);border-radius:12px;
+    padding:13px 16px;box-shadow:0 12px 44px rgba(0,0,0,.55);max-width:600px;width:calc(100% - 40px);max-height:60vh;overflow:auto}
+  .guide.on{display:block;animation:rise .3s ease}
+  .guide .gh{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .guide .gt{color:var(--teal2);font-weight:700;font-size:13px;flex:1}
+  .guide .gx{background:none;border:1px solid var(--line2);color:var(--dim);border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer}
+  .guide .gx:hover{color:var(--ink)}
+  .gitem{border:1px solid var(--line2);border-radius:9px;padding:9px 11px;margin-bottom:8px;background:var(--bg2)}
+  .gitem .gp{color:var(--amber);font-weight:700;font-size:13px;margin-bottom:4px}
+  .gitem .grow{font-size:12.5px;margin-top:3px;display:flex;gap:7px}
+  .gitem .grow .k{color:var(--faint);flex:0 0 44px;font-weight:600}
+  .gitem .grow.fix .v{color:var(--teal2)}
+  .gitem .chk{font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;margin-top:5px}
+  .gfoot{font-size:11px;color:var(--faint);margin-top:2px}
+  .ai-note{margin-top:8px;border-left:2px solid var(--violet);padding:2px 10px;font-size:12px;color:#cbb8f0}
+
   /* inspector */
   .insp-hd{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex:0 0 auto}
   .insp-hd .t{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);font-weight:700}
@@ -203,6 +221,11 @@
       <div class="hint" id="hint">Click <b style="color:var(--teal)">Deploy</b> — the coordinator lights up and hands work to its tools &amp; agents, live.</div>
       <div class="approve" id="approve"><div class="q" id="approve-q"></div>
         <div class="row"><button class="yes" id="ap-yes">✓ Approve</button><button class="no" id="ap-no">✕ Reject</button></div></div>
+      <div class="guide" id="guide">
+        <div class="gh"><span class="gt">🩹 <b id="guide-sum"></b></span><button class="gx" id="guide-x">Dismiss</button></div>
+        <div id="guide-body"></div>
+        <div class="gfoot">Full details are in the <b>Error Resolver</b> panel →</div>
+      </div>
     </div>
 
     <!-- inspector -->
@@ -235,7 +258,7 @@
   ];
   var TYPE_ICON={stage_enter:"▸",stage_exit:"✓",info:"ℹ️",manifest:"📄",cost:"💰",scan:"🛡️",
     approval_required:"🙋",rejected:"✋",command:"❯",rollout:"🚀",failure:"⚠️",error:"⛔",
-    endpoint:"🌐",health:"💓",explanation:"🧠",remediation:"↩️",escalation:"🆘"};
+    endpoint:"🌐",health:"💓",explanation:"🧠",remediation:"↩️",escalation:"🆘",guidance:"🩹"};
 
   var stage=$("stage"), edgesSvg=$("edges"), hint=$("hint");
   var N={};            // id -> {def, ev:[], status, elDisc, elNode, elBadge, x,y}
@@ -292,7 +315,7 @@
   // ---- actor inference: which node owns this event ----
   function actorFor(ev){
     var t=ev.type, s=ev.stage;
-    if(t==="explanation") return "error-resolver";
+    if(t==="explanation"||t==="guidance") return "error-resolver";
     if(t==="cost") return "cost";
     if(t==="manifest") return "manifests";
     if(t==="scan") return "scan";
@@ -334,6 +357,10 @@
     bd.appendChild(m1);
     bd.appendChild(el("div","m2",ev.message||""));
     // rich extras
+    if(ev.type==="guidance" && ev.data){
+      (ev.data.items||[]).forEach(function(it){ bd.appendChild(guideItem(it)); });
+      if(ev.data.ai&&(ev.data.ai.root_cause||ev.data.ai.recommended_action)) bd.appendChild(aiNote(ev.data.ai));
+    }
     if(ev.type==="scan" && ev.data && ev.data.image && (ev.data.image.findings||[]).length){
       ev.data.image.findings.slice(0,6).forEach(function(f){
         var d=el("div","m2"); d.appendChild(el("span","sev "+(f.severity||"UNKNOWN"),f.severity||"?"));
@@ -367,6 +394,32 @@
     document.body.classList.toggle("working",kind==="working"||kind==="waiting");}
   function chip(id,val){var c=$("chip-"+id);$("chip-"+id+"-v").textContent=val;c.classList.add("on");}
 
+  // guidance rendering (the self-healing "here's how to fix it" card)
+  function guideItem(it){
+    var d=el("div","gitem");
+    d.appendChild(el("div","gp",it.problem||""));
+    var why=el("div","grow"); why.appendChild(el("span","k","Why")); why.appendChild(el("span","v",it.cause||"")); d.appendChild(why);
+    var fix=el("div","grow fix"); fix.appendChild(el("span","k","Fix")); fix.appendChild(el("span","v",it.fix||"")); d.appendChild(fix);
+    if(it.checker){ d.appendChild(el("div","chk","flagged by "+it.checker+(it.raw?"  ·  "+it.raw:""))); }
+    return d;
+  }
+  function aiNote(ai){
+    var n=el("div","ai-note");
+    if(ai.root_cause) n.appendChild(el("div",null,"🧠 "+ai.root_cause));
+    if(ai.recommended_action) n.appendChild(el("div",null,"Fix: "+ai.recommended_action));
+    return n;
+  }
+  function showGuide(ev){
+    var g=ev.data||{};
+    $("guide-sum").textContent=g.summary||ev.message||"Here's how to fix it";
+    var body=$("guide-body"); body.textContent="";
+    (g.items||[]).forEach(function(it){ body.appendChild(guideItem(it)); });
+    if(g.ai&&(g.ai.root_cause||g.ai.recommended_action)) body.appendChild(aiNote(g.ai));
+    $("guide").classList.add("on");
+    selectNode("error-resolver");
+  }
+  $("guide-x").onclick=function(){ $("guide").classList.remove("on"); };
+
   var SAY={Detect:"Checking the cluster is reachable…",Generate:"Rendering manifests with Helm…",
     Validate:"Validating before touching the cluster…",Approve:"Waiting for your approval…",
     Scan:"Scanning the image…",Deploy:"Applying to the cluster…",Verify:"Watching rollout & health…",Monitor:"Live — monitoring…"};
@@ -384,6 +437,8 @@
     else if(ev.type==="escalation"){ setNodeStatus(id,"error"); setStatus("error","Needs a human."); }
     else if(ev.type==="endpoint"){ setNodeStatus(id,"done"); setStatus("live","You're live 🎉 — healthy."); chip("ep",(ev.data&&ev.data.service)||"live"); }
     else if(ev.type==="remediation"){ setNodeStatus(id,"active"); }
+    else if(ev.type==="guidance"){ setNodeStatus("error-resolver","active");
+      setStatus("waiting","Blocked — I can't auto-fix this. Here's how to fix it →"); showGuide(ev); }
     else { if(o.status==="idle") setNodeStatus(id,"active"); }
 
     flash(id, ev.type==="error"||ev.type==="escalation");
@@ -443,7 +498,7 @@
     NODES.forEach(function(d){var o=N[d.id];o.ev=[];o.status="idle";o.node.dataset.st="idle";o.badge.classList.remove("on");o.badge.textContent="";});
     timeline=[]; selected=null; NODES.forEach(function(d){N[d.id].node.classList.remove("sel");});
     ["cost","health","ep"].forEach(function(c){$("chip-"+c).classList.remove("on");});
-    $("approve").classList.remove("on"); renderInspector();
+    $("approve").classList.remove("on"); $("guide").classList.remove("on"); renderInspector();
   }
   $("f").onsubmit=function(ev){ ev.preventDefault();
     var fd=new FormData(ev.target); curName=fd.get("name"); curNs=fd.get("namespace")||"default";
