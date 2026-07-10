@@ -30,12 +30,28 @@ in real time**, plus a full **SRE console** to manage any workload in any namesp
   store.
 - **Durable** — Postgres event store + audit log (falls back to in-memory with no DB).
 
-## Quick start (local)
+## Zero-to-running on a fresh machine (installs everything for you)
+
+No Docker, no cluster, no kubectl? These install **only what's missing** (present → skipped)
+and then start the app — no manual setup, no googling:
 
 ```bash
-./run.sh          # checks deps; auto-installs only what's missing into ./.bin; kind up; serve :8000
+# Linux / macOS / WSL2
+./setup.sh        # installs Docker + Python if missing, then hands off to run.sh
 ```
-Open **http://localhost:8000**. Requires Docker/Podman + Python 3.12.
+```bat
+:: Windows 10/11 (native, winget-based)
+setup.bat         :: installs Docker Desktop + kubectl + minikube + helm if missing, then runs
+```
+Open **http://localhost:8000**. (Windows tip: the most reliable path is WSL2 + `./setup.sh` —
+Docker Desktop runs on WSL2 anyway.)
+
+## Quick start (if Docker + Python are already installed)
+
+```bash
+./run.sh          # auto-installs the k8s CLIs into ./.bin, brings up a kind cluster, serves :8000
+```
+Open **http://localhost:8000**.
 
 ## Send it to someone (one portable file)
 
