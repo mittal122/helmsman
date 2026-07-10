@@ -7,3 +7,5 @@ httpx==0.28.*
 anthropic==0.*
 cryptography==44.*
 asyncpg==0.30.*        # production event store + audit log (optional; falls back to in-memory)
+pyjwt==2.*             # signed session tokens (RBAC)
+argon2-cffi==23.*      # password hashing

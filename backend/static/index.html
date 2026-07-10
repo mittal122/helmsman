@@ -40,6 +40,12 @@
   .topnav{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:3px}
   .topnav a{font-size:.78rem;color:var(--muted);padding:5px 12px;border-radius:6px;text-decoration:none;font-weight:600}
   .topnav a.on{background:var(--accent);color:var(--ground)}
+  .badge-user{font-family:var(--mono);font-size:.68rem;color:var(--muted);border:1px solid var(--line2);border-radius:999px;padding:4px 10px;background:var(--panel)}
+  .authov{position:fixed;inset:0;background:var(--ground);display:none;align-items:center;justify-content:center;z-index:100}
+  .authov.on{display:flex}
+  .authcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;width:340px}
+  .authcard h2{margin:0 0 4px} .authcard p{color:var(--dim);font-size:.82rem;margin:0 0 14px}
+  .authcard input{width:100%;margin-bottom:10px} .authcard .err{color:var(--red);font-size:.8rem;min-height:18px}
   .status{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;font-weight:700;border-radius:999px;padding:5px 12px;background:var(--panel-2);color:var(--muted);border:1px solid var(--border)}
   .status .pulse{width:7px;height:7px;border-radius:50%;background:var(--faint)}
   .status[data-s=working]{background:var(--accent-dim);color:var(--accent);border-color:var(--accent)} .status[data-s=working] .pulse{background:var(--accent);animation:p 1.3s infinite}
@@ -155,6 +161,8 @@
     <div class="appmeta"><span class="sep">&#9002;</span> <b id="m-name">—</b> <span class="sep">/</span> ns <b id="m-ns">—</b> <span class="sep">/</span> img <b id="m-img">—</b></div>
     <div class="spacer"></div>
     <div class="topnav"><a href="/" class="on">Deploy</a><a href="/manage">Manage cluster</a></div>
+    <span class="badge-user" id="whoami" style="display:none"></span>
+    <button class="kbtn" id="logout-btn" title="Logout" style="display:none;width:auto;padding:0 10px">Logout</button>
     <div class="conn" id="conn"><span class="d"></span><span id="conn-t">connecting…</span></div>
     <div class="seg" id="modeseg"><button data-m="manual" class="on">Manual</button><button data-m="autonomous">Autonomous</button></div>
     <div class="status" id="status" data-s="idle"><span class="pulse"></span><span id="status-t">Idle</span></div>
@@ -215,6 +223,13 @@
   </div>
 </div>
 
+<div class="authov" id="authov"><div class="authcard">
+  <h2>⎈ Helmsman</h2><p>Sign in to continue</p>
+  <input id="li-email" placeholder="email" autocomplete="username">
+  <input id="li-pw" type="password" placeholder="password" autocomplete="current-password">
+  <div class="err" id="li-err"></div>
+  <button class="btn primary" id="li-btn" style="width:100%">Sign in</button>
+</div></div>
 <script>
 (function(){
   "use strict";
@@ -457,6 +472,34 @@
   $("ca-btn").onclick=function(){$("ask-out").textContent="asking…";
     fetch("/advise-config",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:val("name"),image:val("image")})})
     .then(function(r){return r.json();}).then(function(d){$("ask-out").textContent=(d.summary?d.summary+"\n":"")+((d.suggestions||[]).map(function(s){return s.field+": "+s.value+" — "+s.reason;}).join("\n"));}).catch(function(e){$("ask-out").textContent="unavailable: "+e;});};
+
+  // ---- auth / RBAC ----
+  function showLogin(on){$("authov").classList.toggle("on",on);}
+  async function checkAuth(){
+    try{
+      var r=await fetch("/auth/me",{headers:authHeaders()});
+      if(r.status===401){showLogin(true);$("whoami").style.display="none";$("logout-btn").style.display="none";return;}
+      var d=await r.json();
+      $("whoami").style.display="inline-block";$("whoami").textContent=d.email+" · "+d.role;
+      $("logout-btn").style.display="inline-block";showLogin(false);
+    }catch(e){}
+  }
+  $("li-btn").onclick=async function(){
+    $("li-err").textContent="";
+    try{
+      var r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:$("li-email").value,password:$("li-pw").value})});
+      if(!r.ok){$("li-err").textContent="invalid email or password";return;}
+      var d=await r.json();localStorage.setItem("helmsman_token",d.token);tokenEl.value=d.token;
+      showLogin(false);checkAuth();
+    }catch(e){$("li-err").textContent=String(e);}
+  };
+  $("logout-btn").onclick=async function(){
+    try{await fetch("/auth/logout",{method:"POST",headers:authHeaders()});}catch(_){}
+    localStorage.removeItem("helmsman_token");tokenEl.value="";
+    $("whoami").style.display="none";$("logout-btn").style.display="none";showLogin(true);
+  };
+  checkAuth();
 })();
 </script>
 </body>

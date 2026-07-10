@@ -31,7 +31,16 @@ a decision, update the spec in the same change.
   `Dockerfile` (multi-stage, bundles kubectl/helm/kubeconform/kube-score/trivy, non-root,
   HEALTHCHECK), `docker-compose.yml` (app + postgres, one-command self-host),
   `.github/workflows/ci.yml` (pytest + docker build), `LICENSE` (MIT), `README.md`.
-- **Tier 2 (remaining for multi-tenant SaaS sale):** per-user RBAC + enforced kubeconfig
+- **Tier 2 increment 1 DONE — multi-user auth + RBAC:** `auth.py` (argon2 passwords,
+  JWT sessions, roles viewer<operator<admin, `current_user`/`require_role`, per-request
+  audit actor via contextvar; operator-token kept as bootstrap-admin fallback; open dev
+  mode only when no AUTH_TOKEN AND no users). `store.py` users table (durable). Endpoints:
+  `/auth/login|me|logout`, `/users` CRUD (admin). Reads=viewer, mutations=operator,
+  delete+user-admin=admin. Audit records the REAL user email. Bootstrap admin from
+  `BOOTSTRAP_ADMIN_EMAIL/PASSWORD`. UI: login overlay + user badge + logout on both
+  consoles; admin Users panel in /manage; delete gated to admin. Verified live: viewer
+  deploy→403, viewer read→200, audit shows real actors. 135 tests.
+- **Tier 2 remaining:** enforced per-user kubeconfig
   isolation (encrypted store already built — wire it into the mgmt console), horizontal
   scale/HA (move global state to Postgres/Redis, per-request kubeconfig, job runner for
   deploys), TLS + rate-limit + pen-test, cloud-cluster E2E, KEDA/VPA. Ratings: personal

@@ -88,6 +88,17 @@
   .modal code{font-family:var(--mono);color:var(--ink);background:var(--panel-2);padding:1px 6px;border-radius:5px}
   .modal input{width:100%;margin:10px 0}
   .modal .row{display:flex;gap:9px;justify-content:flex-end;margin-top:8px}
+  .badge-user{font-family:var(--mono);font-size:.7rem;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:4px 10px;background:var(--panel-2)}
+  .badge-user b{color:var(--accent)}
+  .authov{position:fixed;inset:0;background:var(--ground);display:none;align-items:center;justify-content:center;z-index:100}
+  .authov.on{display:flex}
+  .authcard{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:24px;width:340px}
+  .authcard h2{margin:0 0 4px;font-size:1.1rem}.authcard p{color:var(--muted);font-size:.82rem;margin:0 0 14px}
+  .authcard input{width:100%;margin-bottom:10px}
+  .authcard .err{color:var(--crit);font-size:.8rem;min-height:18px}
+  .users-list{padding:8px 0}
+  .urow{display:flex;align-items:center;gap:10px;padding:7px 12px;font-family:var(--mono);font-size:.78rem;border-top:1px solid var(--border)}
+  .urow .em{flex:1} .urow select{padding:4px 8px}
 </style>
 </head>
 <body>
@@ -95,6 +106,8 @@
   <div class="top">
     <div class="brand"><span class="logo">&#9096;</span><div>Helmsman<small>Cluster Management</small></div></div>
     <div class="spacer"></div>
+    <span class="badge-user" id="whoami" style="display:none"></span>
+    <button class="btn" id="logout-btn" style="display:none;padding:5px 10px">Logout</button>
     <div class="conn" id="conn"><span class="d"></span><span id="conn-t">cluster</span></div>
     <div class="nav"><a href="/">Deploy</a><a href="/manage" class="on">Manage</a></div>
     <button class="icbtn" id="theme-btn" title="Theme">◑</button>
@@ -121,9 +134,28 @@
       <div class="detail" id="detail"><div class="empty">select a workload to see its topology &amp; controls</div></div>
     </div>
   </div>
+
+  <div class="panel" id="users-panel" style="display:none;margin-top:14px">
+    <div class="phd">Users &amp; roles (admin)
+      <span class="mini" style="margin-left:auto">
+        <input id="nu-email" placeholder="email" style="width:150px">
+        <input id="nu-pw" type="password" placeholder="password (min 8)" style="width:130px">
+        <select id="nu-role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <button class="btn primary" id="nu-add" style="padding:5px 10px">Add</button>
+      </span>
+    </div>
+    <div class="users-list" id="users-list"></div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="authov" id="authov"><div class="authcard">
+  <h2>⎈ Helmsman</h2><p>Sign in to manage your cluster</p>
+  <input id="li-email" placeholder="email" autocomplete="username">
+  <input id="li-pw" type="password" placeholder="password" autocomplete="current-password">
+  <div class="err" id="li-err"></div>
+  <button class="btn primary" id="li-btn" style="width:100%">Sign in</button>
+</div></div>
 <div class="modal" id="modal"><div class="box">
   <h3>⚠ Delete workload</h3>
   <p>This permanently deletes <code id="del-name"></code> in namespace <code id="del-ns"></code> and everything it owns. This cannot be undone.</p>
@@ -152,6 +184,58 @@
     if(!r.ok){throw new Error((d&&d.detail)||("HTTP "+r.status));}
     return d;
   }
+
+  // ---- auth / RBAC ----
+  var myRole="viewer";
+  function showLogin(on){ $("authov").classList.toggle("on", on); }
+  async function checkAuth(){
+    try{
+      var r=await fetch("/auth/me",{headers:headers()});
+      if(r.status===401){ showLogin(true); $("whoami").style.display="none"; $("logout-btn").style.display="none"; return false; }
+      var d=await r.json(); myRole=d.role;
+      $("whoami").style.display="inline-block"; $("whoami").textContent=d.email+" · "+d.role;
+      $("logout-btn").style.display="inline-block"; showLogin(false);
+      if(myRole==="admin"){ $("users-panel").style.display="block"; loadUsers(); } else { $("users-panel").style.display="none"; }
+      return true;
+    }catch(e){ return true; }   // network hiccup -> don't lock out
+  }
+  $("li-btn").onclick=async function(){
+    $("li-err").textContent="";
+    try{
+      var r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:$("li-email").value,password:$("li-pw").value})});
+      if(!r.ok){ $("li-err").textContent="invalid email or password"; return; }
+      var d=await r.json(); localStorage.setItem("helmsman_token",d.token); tokenEl.value=d.token;
+      showLogin(false); await checkAuth(); loadNamespaces();
+    }catch(e){ $("li-err").textContent=String(e); }
+  };
+  $("logout-btn").onclick=async function(){
+    try{ await fetch("/auth/logout",{method:"POST",headers:headers()}); }catch(_){}
+    localStorage.removeItem("helmsman_token"); tokenEl.value="";
+    $("whoami").style.display="none"; $("logout-btn").style.display="none"; $("users-panel").style.display="none";
+    showLogin(true);
+  };
+  async function loadUsers(){
+    try{
+      var d=await api("GET","/users"); var host=$("users-list"); host.textContent="";
+      d.users.forEach(function(u){
+        var row=el("div","urow");
+        row.appendChild(el("span","em",u.email+(u.active?"":"  (inactive)")));
+        var sel=document.createElement("select");
+        ["viewer","operator","admin"].forEach(function(rr){var o=document.createElement("option");o.value=rr;o.textContent=rr;if(rr===u.role)o.selected=true;sel.appendChild(o);});
+        sel.onchange=function(){ api("PUT","/users/"+encodeURIComponent(u.email)+"/role",{role:sel.value}).then(function(){toast("role updated");}).catch(function(e){toast(e.message,true);}); };
+        row.appendChild(sel);
+        var del=el("button","btn danger","Deactivate"); del.style.padding="4px 10px";
+        del.onclick=function(){ api("DELETE","/users/"+encodeURIComponent(u.email)).then(function(){toast("deactivated");loadUsers();}).catch(function(e){toast(e.message,true);}); };
+        row.appendChild(del); host.appendChild(row);
+      });
+    }catch(e){ $("users-list").textContent=""; $("users-list").appendChild(el("div","empty",e.message)); }
+  }
+  $("nu-add").onclick=async function(){
+    try{ await api("POST","/users",{email:$("nu-email").value,password:$("nu-pw").value,role:$("nu-role").value});
+      $("nu-email").value=""; $("nu-pw").value=""; toast("user created"); loadUsers();
+    }catch(e){ toast("create: "+e.message,true); }
+  };
 
   async function loadNamespaces(){
     try{var d=await api("GET","/namespaces");var sel=$("ns");var cur=sel.value;
@@ -210,7 +294,7 @@
     a.appendChild(scaleWrap);
     var restart=el("button","btn","↻ Restart");restart.onclick=function(){act("restart");};a.appendChild(restart);
     var stop=el("button","btn warn","■ Stop (scale 0)");stop.onclick=function(){act("stop");};a.appendChild(stop);
-    var del=el("button","btn danger","🗑 Delete");del.onclick=openDelete;a.appendChild(del);
+    if(myRole==="admin"){ var del=el("button","btn danger","🗑 Delete");del.onclick=openDelete;a.appendChild(del); }
     var logsBtn=el("button","btn","View logs");logsBtn.onclick=loadLogs;a.appendChild(logsBtn);
     d.appendChild(a);
     var ub=el("div","urlbox");ub.id="urlbox";d.appendChild(ub);renderUrlBox();
@@ -335,7 +419,7 @@
     try{fetch("/forwards/stop",{method:"POST",headers:headers(),body:JSON.stringify({keys:keys}),keepalive:true});}catch(_){}
   });
 
-  loadNamespaces();
+  checkAuth().then(function(ok){ if(ok) loadNamespaces(); });
 })();
 </script>
 </body>

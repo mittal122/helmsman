@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, field_validator, Field
 import auth
 import kubeconfig_store
@@ -31,6 +31,14 @@ from contextlib import asynccontextmanager
 async def lifespan(_app):
     backend = await store.init()
     log.info(f"store backend: {backend}")
+    # bootstrap the first admin from env (only if no users exist yet)
+    be, bp = os.environ.get("BOOTSTRAP_ADMIN_EMAIL"), os.environ.get("BOOTSTRAP_ADMIN_PASSWORD")
+    if be and bp and await store.user_count() == 0:
+        try:
+            await store.user_create(be, auth.hash_password(bp), "admin")
+            log.info(f"bootstrapped admin user: {be}")
+        except Exception as e:
+            log.info(f"bootstrap admin skipped: {e}")
     async def reaper():
         while True:
             await asyncio.sleep(FORWARD_REAP_INTERVAL_S)
@@ -132,7 +140,7 @@ async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
-    await store.append_audit("operator", "deploy", f"{req.namespace}/{req.name}", True,
+    await store.append_audit(auth.actor(), "deploy", f"{req.namespace}/{req.name}", True,
                              f"image={req.image} mode={req.mode}")
     return {"deployment_id": req.name}
 
@@ -151,7 +159,7 @@ async def rollback_endpoint(req: RollbackRequest):
     await bus.publish(Event(type="remediation", stage="Rollback",
                             message=f"Rolled back {req.name} to revision {req.revision}",
                             data={"revision": req.revision}))
-    await store.append_audit("operator", "rollback", f"{req.namespace}/{req.name}", True,
+    await store.append_audit(auth.actor(), "rollback", f"{req.namespace}/{req.name}", True,
                              f"revision={req.revision}")
     return {"ok": True}
 
@@ -190,7 +198,73 @@ async def delete_kubeconfig(name: str):
     return {"ok": kubeconfig_store.delete(valid)}
 
 # ---------- Cluster management (SRE console) — token-gated, error-mapped ----------
-_TG = [Depends(auth.require_token)]
+_RV = [Depends(auth.require_role("viewer"))]     # read
+_RO = [Depends(auth.require_role("operator"))]   # mutate
+_RA = [Depends(auth.require_role("admin"))]       # destructive / user admin
+_TG = _RO                                          # default gate for mutations
+
+# ---------- auth + user management (RBAC) ----------
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class CreateUserRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+    role: str = "viewer"
+
+class RoleRequest(BaseModel):
+    role: str
+
+@app.post("/auth/login")
+async def login(req: LoginRequest):
+    u = await store.user_get(req.email)
+    if not u or not u.get("active", True) or not auth.verify_password(u["pw_hash"], req.password):
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    token = auth.make_token(u["email"], u["role"])
+    await store.append_audit(u["email"], "login", u["email"], True)
+    resp = JSONResponse({"token": token, "email": u["email"], "role": u["role"]})
+    resp.set_cookie("helmsman_session", token, httponly=True, samesite="lax", max_age=auth.JWT_TTL_S)
+    return resp
+
+@app.get("/auth/me")
+async def me(user: dict = Depends(auth.current_user)):
+    return {"email": user["email"], "role": user["role"]}
+
+@app.post("/auth/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("helmsman_session")
+    return resp
+
+@app.get("/users", dependencies=_RA)
+async def users_list():
+    return {"users": await store.user_list()}
+
+@app.post("/users", dependencies=_RA)
+async def users_create(req: CreateUserRequest):
+    if req.role not in auth.ROLES:
+        raise HTTPException(status_code=400, detail="role must be viewer|operator|admin")
+    try:
+        u = await store.user_create(req.email, auth.hash_password(req.password), req.role)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await store.append_audit(auth.actor(), "user_create", req.email, True, f"role={req.role}")
+    return {"email": u["email"], "role": u["role"]}
+
+@app.put("/users/{email}/role", dependencies=_RA)
+async def users_role(email: str, req: RoleRequest):
+    if req.role not in auth.ROLES:
+        raise HTTPException(status_code=400, detail="invalid role")
+    await store.user_set_role(email, req.role)
+    await store.append_audit(auth.actor(), "user_role", email, True, f"role={req.role}")
+    return {"ok": True}
+
+@app.delete("/users/{email}", dependencies=_RA)
+async def users_deactivate(email: str):
+    await store.user_set_active(email, False)
+    await store.append_audit(auth.actor(), "user_deactivate", email, True)
+    return {"ok": True}
 
 class ScaleRequest(BaseModel):
     replicas: int = Field(ge=0, le=100)
@@ -210,19 +284,19 @@ async def _cluster(fn, *args):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-@app.get("/namespaces", dependencies=_TG)
+@app.get("/namespaces", dependencies=_RV)
 async def namespaces():
     return {"namespaces": await _cluster(cluster.list_namespaces)}
 
-@app.get("/namespaces/{ns}/workloads", dependencies=_TG)
+@app.get("/namespaces/{ns}/workloads", dependencies=_RV)
 async def workloads(ns: str):
     return {"workloads": await _cluster(cluster.list_workloads, ns)}
 
-@app.get("/namespaces/{ns}/workloads/{name}", dependencies=_TG)
+@app.get("/namespaces/{ns}/workloads/{name}", dependencies=_RV)
 async def workload_summary(ns: str, name: str):
     return await _cluster(cluster.get_summary, ns, name)
 
-@app.get("/namespaces/{ns}/workloads/{name}/logs", dependencies=_TG)
+@app.get("/namespaces/{ns}/workloads/{name}/logs", dependencies=_RV)
 async def workload_logs(ns: str, name: str, tail: int = 200):
     return {"logs": await _cluster(cluster.get_logs, ns, name, min(max(tail, 1), 2000))}
 
@@ -264,36 +338,36 @@ async def readyz():
     return {"ready": True, "store": store.backend_name()}
 
 # ---------- durable history + audit trail (token-gated) ----------
-@app.get("/history", dependencies=_TG)
+@app.get("/history", dependencies=_RV)
 async def history(limit: int = 200):
     return {"events": await store.recent_events(min(max(limit, 1), 2000))}
 
-@app.get("/audit", dependencies=_TG)
+@app.get("/audit", dependencies=_RA)
 async def audit_log(limit: int = 200):
     return {"audit": await store.recent_audit(min(max(limit, 1), 2000))}
 
 @app.post("/namespaces/{ns}/workloads/{name}/scale", dependencies=_TG)
 async def workload_scale(ns: str, name: str, req: ScaleRequest):
     r = await _cluster(cluster.scale, ns, name, req.replicas)
-    await store.append_audit("operator", "scale", f"{ns}/{name}", True, f"replicas={req.replicas}")
+    await store.append_audit(auth.actor(), "scale", f"{ns}/{name}", True, f"replicas={req.replicas}")
     return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/stop", dependencies=_TG)
 async def workload_stop(ns: str, name: str):
     r = await _cluster(cluster.stop, ns, name)
-    await store.append_audit("operator", "stop", f"{ns}/{name}", True)
+    await store.append_audit(auth.actor(), "stop", f"{ns}/{name}", True)
     return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/restart", dependencies=_TG)
 async def workload_restart(ns: str, name: str):
     r = await _cluster(cluster.restart, ns, name)
-    await store.append_audit("operator", "restart", f"{ns}/{name}", True)
+    await store.append_audit(auth.actor(), "restart", f"{ns}/{name}", True)
     return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/autoscale", dependencies=_TG)
 async def workload_autoscale(ns: str, name: str, req: AutoscaleRequest):
     r = await _cluster(cluster.set_autoscale, ns, name, req.min, req.max, req.cpu)
-    await store.append_audit("operator", "autoscale", f"{ns}/{name}", True,
+    await store.append_audit(auth.actor(), "autoscale", f"{ns}/{name}", True,
                              f"min={req.min} max={req.max} cpu={req.cpu}")
     return r
 
@@ -301,14 +375,14 @@ async def workload_autoscale(ns: str, name: str, req: AutoscaleRequest):
 async def workload_autoscale_off(ns: str, name: str):
     return await _cluster(cluster.disable_autoscale, ns, name)
 
-@app.delete("/namespaces/{ns}/workloads/{name}", dependencies=_TG)
+@app.delete("/namespaces/{ns}/workloads/{name}", dependencies=_RA)
 async def workload_delete(ns: str, name: str, confirm: str = ""):
     # two-step confirmation: the client must echo the exact workload name
     if confirm != name:
         raise HTTPException(status_code=400,
                             detail="confirmation required: pass ?confirm=<workload name>")
     r = await _cluster(cluster.delete_app, ns, name)
-    await store.append_audit("operator", "delete", f"{ns}/{name}", True, str(r.get("method", "")))
+    await store.append_audit(auth.actor(), "delete", f"{ns}/{name}", True, str(r.get("method", "")))
     return r
 
 @app.get("/manage")

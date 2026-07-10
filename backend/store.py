@@ -20,6 +20,8 @@ class _InMem:
     def __init__(self):
         self.events = collections.deque(maxlen=_MAX_MEM)
         self.audit = collections.deque(maxlen=_MAX_MEM)
+        self.users = {}     # email -> {id,email,pw_hash,role,active}
+        self._uid = 0
     async def init(self): return
     async def append_event(self, e): self.events.append(e)
     async def recent_events(self, limit): return list(self.events)[-limit:]
@@ -27,6 +29,20 @@ class _InMem:
     async def recent_audit(self, limit): return list(self.audit)[-limit:][::-1]
     async def healthy(self): return True
     async def close(self): return
+    # users
+    async def user_create(self, email, pw_hash, role):
+        if email in self.users: raise ValueError("email already exists")
+        self._uid += 1
+        self.users[email] = {"id": self._uid, "email": email, "pw_hash": pw_hash, "role": role, "active": True}
+        return self.users[email]
+    async def user_get(self, email): return self.users.get(email)
+    async def user_list(self):
+        return [{"email": u["email"], "role": u["role"], "active": u["active"]} for u in self.users.values()]
+    async def user_set_role(self, email, role):
+        if email in self.users: self.users[email]["role"] = role
+    async def user_set_active(self, email, active):
+        if email in self.users: self.users[email]["active"] = active
+    async def user_count(self): return len(self.users)
 
 # ---------- postgres (production) ----------
 class _Postgres:
@@ -41,6 +57,10 @@ class _Postgres:
             await c.execute("""CREATE TABLE IF NOT EXISTS audit(
                 id BIGSERIAL PRIMARY KEY, actor TEXT, action TEXT, target TEXT,
                 ok BOOLEAN, detail TEXT, created TIMESTAMPTZ DEFAULT now())""")
+            await c.execute("""CREATE TABLE IF NOT EXISTS users(
+                id BIGSERIAL PRIMARY KEY, email TEXT UNIQUE NOT NULL, pw_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer', active BOOLEAN NOT NULL DEFAULT true,
+                created TIMESTAMPTZ DEFAULT now())""")
     async def append_event(self, e):
         async with self.pool.acquire() as c:
             await c.execute(
@@ -74,6 +94,33 @@ class _Postgres:
     async def close(self):
         if self.pool:
             await self.pool.close()
+    # users
+    async def user_create(self, email, pw_hash, role):
+        async with self.pool.acquire() as c:
+            try:
+                r = await c.fetchrow(
+                    "INSERT INTO users(email,pw_hash,role) VALUES($1,$2,$3) RETURNING id,email,role,active",
+                    email, pw_hash, role)
+            except Exception as e:
+                raise ValueError("email already exists") from e
+        return dict(r)
+    async def user_get(self, email):
+        async with self.pool.acquire() as c:
+            r = await c.fetchrow("SELECT id,email,pw_hash,role,active FROM users WHERE email=$1", email)
+        return dict(r) if r else None
+    async def user_list(self):
+        async with self.pool.acquire() as c:
+            rows = await c.fetch("SELECT email,role,active FROM users ORDER BY email")
+        return [dict(r) for r in rows]
+    async def user_set_role(self, email, role):
+        async with self.pool.acquire() as c:
+            await c.execute("UPDATE users SET role=$2 WHERE email=$1", email, role)
+    async def user_set_active(self, email, active):
+        async with self.pool.acquire() as c:
+            await c.execute("UPDATE users SET active=$2 WHERE email=$1", email, active)
+    async def user_count(self):
+        async with self.pool.acquire() as c:
+            return int(await c.fetchval("SELECT count(*) FROM users"))
 
 _impl = None
 
@@ -114,5 +161,25 @@ async def recent_audit(limit: int = 200) -> list:
 async def healthy() -> bool:
     return await _impl.healthy() if _impl else True
 async def close() -> None:
+    global _impl
     if _impl:
         await _impl.close()
+    _impl = None
+
+# ---------- users (durable identity) ----------
+async def user_create(email: str, pw_hash: str, role: str) -> dict:
+    if not _impl:
+        raise RuntimeError("store not initialized")
+    return await _impl.user_create(email, pw_hash, role)
+async def user_get(email: str):
+    return await _impl.user_get(email) if _impl else None
+async def user_list() -> list:
+    return await _impl.user_list() if _impl else []
+async def user_set_role(email: str, role: str) -> None:
+    if _impl:
+        await _impl.user_set_role(email, role)
+async def user_set_active(email: str, active: bool) -> None:
+    if _impl:
+        await _impl.user_set_active(email, active)
+async def user_count() -> int:
+    return await _impl.user_count() if _impl else 0

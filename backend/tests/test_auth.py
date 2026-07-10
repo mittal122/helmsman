@@ -1,23 +1,16 @@
-import os
-import pytest
-from fastapi import HTTPException
 import auth
 
-def test_open_when_token_unset(monkeypatch):
-    monkeypatch.delenv("AUTH_TOKEN", raising=False)
-    assert auth.require_token(None) is None            # no header, still allowed
+def test_password_hash_and_verify():
+    h = auth.hash_password("s3cret-password")
+    assert h != "s3cret-password"                 # hashed, not plaintext
+    assert auth.verify_password(h, "s3cret-password") is True
+    assert auth.verify_password(h, "wrong") is False
 
-def test_enforced_when_token_set(monkeypatch):
-    monkeypatch.setenv("AUTH_TOKEN", "s3cret")
-    with pytest.raises(HTTPException) as e:
-        auth.require_token(None)
-    assert e.value.status_code == 401
-    with pytest.raises(HTTPException):
-        auth.require_token("Bearer wrong")
-    assert auth.require_token("Bearer s3cret") is None  # correct token allowed
+def test_jwt_roundtrip_and_reject_garbage():
+    t = auth.make_token("a@b.com", "operator")
+    p = auth._decode(t)
+    assert p["sub"] == "a@b.com" and p["role"] == "operator"
+    assert auth._decode("not-a-jwt") is None
 
-def test_constant_time_compare_used(monkeypatch):
-    # a bare token without the Bearer prefix is rejected
-    monkeypatch.setenv("AUTH_TOKEN", "s3cret")
-    with pytest.raises(HTTPException):
-        auth.require_token("s3cret")
+def test_role_ranks_ordered():
+    assert auth.ROLES["admin"] > auth.ROLES["operator"] > auth.ROLES["viewer"]

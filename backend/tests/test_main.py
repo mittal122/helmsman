@@ -1,5 +1,29 @@
 from fastapi.testclient import TestClient
 import main
+import store
+
+def test_rbac_multi_user_flow(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(main.cluster, "list_namespaces", lambda: [{"name": "default", "status": "Active", "created": ""}])
+    with TestClient(main.app) as c:                     # lifespan -> in-memory store, no users
+        # first request: no users + no token -> open dev mode = admin
+        assert c.get("/auth/me").json()["role"] == "admin"
+        # admin creates a viewer (allowed because still open at creation time)
+        assert c.post("/users", json={"email": "v@x.com", "password": "password1", "role": "viewer"}).status_code == 200
+        # a user now exists -> auth is enforced; unauthenticated is 401
+        assert c.get("/users").status_code == 401
+        # viewer logs in
+        r = c.post("/auth/login", json={"email": "v@x.com", "password": "password1"})
+        assert r.status_code == 200
+        h = {"Authorization": "Bearer " + r.json()["token"]}
+        assert c.get("/auth/me", headers=h).json()["role"] == "viewer"
+        # viewer CAN read
+        assert c.get("/namespaces", headers=h).status_code == 200
+        # viewer CANNOT deploy (operator) or manage users (admin)
+        assert c.post("/deploy", json={"name": "a", "image": "i:1"}, headers=h).status_code == 403
+        assert c.post("/users", json={"email": "y@x.com", "password": "password1"}, headers=h).status_code == 403
+        # wrong password rejected
+        assert c.post("/auth/login", json={"email": "v@x.com", "password": "nope"}).status_code == 401
 
 def test_deploy_accepts_config_and_returns_id(monkeypatch):
     async def fake_run(cfg, bus, approvals, monitors, breakers):
