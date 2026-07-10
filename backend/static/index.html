@@ -182,7 +182,7 @@
         <div><label>Port</label><input name="port" value="8080" type="number"></div>
         <div><label>Replicas</label><input name="replicas" value="2" type="number"></div>
         <div><label>Env (K=V,…)</label><input name="env" placeholder="LOG_LEVEL=info"></div>
-        <div><label>Secrets (K=V, redacted)</label><input name="secrets" placeholder="API_KEY=•••"></div>
+        <div><label>Secrets (K=V, redacted)</label><input name="secrets" type="password" placeholder="API_KEY=•••"></div>
       </div>
       <div class="frow">
         <div style="flex:2"><label>Git repo <span style="color:var(--faint);font-weight:400">(build from source — leave Image blank)</span></label><input name="git_repo" placeholder="https://github.com/org/app.git"></div>
@@ -265,7 +265,7 @@
     if(t==="approval_required")return["warn","approve?"];
     if(t==="rejected")return["warn","rejected"];
     if(t==="remediation")return["warn","remediate"];
-    if(t==="stage_enter"||t==="stage_exit")return["stage",ev.stage.toLowerCase()];
+    if(t==="stage_enter"||t==="stage_exit")return["stage",(ev.stage||"").toLowerCase()];
     if(t==="health")return["info","health"];
     return["info","info"];
   }
@@ -392,7 +392,7 @@
     if(t!=="health" && t!=="stage_exit") row(ev);
 
     if(t==="stage_enter"){ stageEnter(ev.stage); setStatus("working",ev.stage+" — "+(SAY[ev.stage]||"working")); nowBanner("Agent", SAY[ev.stage]||ev.stage, $("now-bar").textContent); }
-    else if(t==="stage_exit"){ if(!stg[ev.stage].box.classList.contains("failed"))setStage(ev.stage,"done"); }
+    else if(t==="stage_exit"){ var o=stg[ev.stage]; if(o && !o.box.classList.contains("failed"))setStage(ev.stage,"done"); }
     else if(t==="error"){ setStage(ev.stage,"failed"); setStatus("error",ev.stage+" failed"); }
     else if(t==="escalation"){ setStatus("error","needs a human"); }
     else if(t==="approval_required"){ curName=(ev.data&&ev.data.name)||curName; curNs=(ev.data&&ev.data.namespace)||curNs;
@@ -401,7 +401,7 @@
     else if(t==="endpoint"){ setStage("Verify","done"); setStatus("live","live & healthy"); var d=ev.data||{};
       var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); u.textContent="";
       var lbl=ep.querySelector(".lbl"); if(lbl) lbl.textContent = d.url ? "Open your app" : "Access via port-forward";
-      if(d.url){ liveForwardKey=curName; var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
+      if(d.url && /^https?:\/\//i.test(d.url)){ liveForwardKey=curName; var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
         u.appendChild(el("div","epnote","auto port-forward running — click to open in a new tab")); }
       else { u.appendChild(document.createTextNode(d.service?d.service+":"+d.port:ev.message)); }
       if(d.port_forward){ u.appendChild(el("div","epcmd","$ "+d.port_forward)); }
@@ -488,7 +488,7 @@
       var d=await r.json();
       $("whoami").style.display="inline-block";$("whoami").textContent=d.email+" · "+d.role;
       $("logout-btn").style.display="inline-block";showLogin(false);
-    }catch(e){}
+    }catch(e){ showLogin(true);$("whoami").style.display="none";$("logout-btn").style.display="none"; }
   }
   $("li-btn").onclick=async function(){
     $("li-err").textContent="";

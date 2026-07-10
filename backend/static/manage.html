@@ -271,7 +271,7 @@
 
   async function openWorkload(name){
     curName=name; renderWorkloads.__last&&0;
-    document.querySelectorAll(".wl").forEach(function(x){x.classList.toggle("sel",x.querySelector(".n").textContent.indexOf(name)===0);});
+    document.querySelectorAll(".wl").forEach(function(x){x.classList.toggle("sel",x.querySelector(".n").textContent===name);});
     await refreshDetail();
     if(timer)clearInterval(timer);
     timer=setInterval(refreshDetail,5000);
@@ -369,7 +369,7 @@
     var ub=$("urlbox");if(!ub)return;ub.textContent="";
     var f=forwards[curNs+"/"+curName];if(!f)return;
     ub.appendChild(el("span","urllbl","▶ Running: "));
-    var link=el("a",null,f.url);link.href=f.url;link.target="_blank";link.rel="noopener";ub.appendChild(link);
+    var link=el("a",null,f.url);if(/^https?:\/\//i.test(f.url||"")){link.href=f.url;}link.target="_blank";link.rel="noopener";ub.appendChild(link);
     ub.appendChild(el("span","urlnote","  ("+f.target+" → :"+f.port+", click to open in a new tab)"));
     var s=el("button","btn","Stop forwarding");s.style.marginLeft="10px";s.onclick=stopForward;ub.appendChild(s);
   }

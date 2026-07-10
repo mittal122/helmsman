@@ -34,6 +34,7 @@ async def lifespan(_app):
     log.info(f"store backend: {backend}")
     # bootstrap the first admin from env (only if no users exist yet)
     be, bp = os.environ.get("BOOTSTRAP_ADMIN_EMAIL"), os.environ.get("BOOTSTRAP_ADMIN_PASSWORD")
+    be = be.strip().lower() if be else be
     if be and bp and await store.user_count() == 0:
         try:
             await store.user_create(be, auth.hash_password(bp), "admin")
@@ -206,8 +207,10 @@ async def advise_config(req: AdviseRequest):
 async def onboard(req: OnboardRequest):
     return await asyncio.to_thread(onboarding.generate, req.model_dump())
 
-@app.post("/kubeconfigs", dependencies=[Depends(auth.require_token)])
+@app.post("/kubeconfigs", dependencies=[Depends(auth.require_role("admin"))])
 async def add_kubeconfig(req: KubeconfigRequest):
+    # admin-gated: registering a cluster credential is a trust escalation (an operator
+    # could add a kubeconfig whose SA is cluster-admin elsewhere and deploy to it).
     kubeconfig_store.save(req.name, req.content.encode())
     return {"ok": True}
 
@@ -215,7 +218,7 @@ async def add_kubeconfig(req: KubeconfigRequest):
 async def list_kubeconfigs():
     return {"names": kubeconfig_store.list_names()}
 
-@app.delete("/kubeconfigs/{name}", dependencies=[Depends(auth.require_token)])
+@app.delete("/kubeconfigs/{name}", dependencies=[Depends(auth.require_role("admin"))])
 async def delete_kubeconfig(name: str):
     try:
         valid = _dns1123(name)
@@ -244,8 +247,12 @@ class RoleRequest(BaseModel):
 
 @app.post("/auth/login")
 async def login(req: LoginRequest):
-    u = await store.user_get(req.email)
-    if not u or not u.get("active", True) or not auth.verify_password(u["pw_hash"], req.password):
+    email = req.email.strip().lower()
+    u = await store.user_get(email)
+    # always run one argon2 verify (real hash or dummy) so response time doesn't reveal
+    # whether the email exists — closes the user-enumeration timing oracle.
+    valid = auth.verify_password(u["pw_hash"] if u else auth.DUMMY_HASH, req.password)
+    if not u or not u.get("active", True) or not valid:
         raise HTTPException(status_code=401, detail="invalid email or password")
     token = auth.make_token(u["email"], u["role"])
     await store.append_audit(u["email"], "login", u["email"], True)
@@ -279,23 +286,39 @@ async def users_list():
 async def users_create(req: CreateUserRequest):
     if req.role not in auth.ROLES:
         raise HTTPException(status_code=400, detail="role must be viewer|operator|admin")
+    email = req.email.strip().lower()
     try:
-        u = await store.user_create(req.email, auth.hash_password(req.password), req.role)
+        u = await store.user_create(email, auth.hash_password(req.password), req.role)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     await store.append_audit(auth.actor(), "user_create", req.email, True, f"role={req.role}")
     return {"email": u["email"], "role": u["role"]}
 
+async def _is_last_active_admin(email: str) -> bool:
+    admins = [u for u in await store.user_list()
+              if u.get("active", True) and u.get("role") == "admin"]
+    return len(admins) == 1 and admins[0]["email"] == email
+
 @app.put("/users/{email}/role", dependencies=_RA)
 async def users_role(email: str, req: RoleRequest):
+    email = email.strip().lower()
     if req.role not in auth.ROLES:
         raise HTTPException(status_code=400, detail="invalid role")
+    if await store.user_get(email) is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if req.role != "admin" and await _is_last_active_admin(email):
+        raise HTTPException(status_code=400, detail="cannot demote the last active admin")
     await store.user_set_role(email, req.role)
     await store.append_audit(auth.actor(), "user_role", email, True, f"role={req.role}")
     return {"ok": True}
 
 @app.delete("/users/{email}", dependencies=_RA)
 async def users_deactivate(email: str):
+    email = email.strip().lower()
+    if await store.user_get(email) is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if await _is_last_active_admin(email):
+        raise HTTPException(status_code=400, detail="cannot deactivate the last active admin")
     await store.user_set_active(email, False)
     await store.append_audit(auth.actor(), "user_deactivate", email, True)
     return {"ok": True}
@@ -316,7 +339,10 @@ async def _cluster(fn, *args):
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="cluster call timed out")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        msg = str(e)
+        if "NotFound" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)   # missing resource = client error
+        raise HTTPException(status_code=502, detail=msg)
 
 @app.get("/namespaces", dependencies=_RV)
 async def namespaces():
@@ -423,8 +449,11 @@ async def workload_delete(ns: str, name: str, confirm: str = ""):
 async def manage():
     return FileResponse(os.path.join(STATIC, "manage.html"))
 
-@app.get("/events")
+@app.get("/events", dependencies=_RV)
 async def events():
+    # viewer-gated: the live stream carries the same deploy activity (commands, errors,
+    # pod logs) that /history persists — must not be readable unauthenticated.
+    # EventSource sends the same-origin session cookie, so the UI keeps working.
     q = bus.subscribe()
     async def gen():
         try:

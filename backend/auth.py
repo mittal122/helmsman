@@ -49,6 +49,11 @@ def verify_password(pw_hash: str, p: str) -> bool:
     except Exception:
         return False
 
+# precomputed hash of a random string: verify a login attempt against THIS when the email
+# doesn't exist, so a missing user costs the same argon2 time as a real one (no timing
+# oracle that distinguishes valid from invalid emails).
+DUMMY_HASH = _ph.hash(secrets.token_urlsafe(16))
+
 # ---------- JWT ----------
 def make_token(email: str, role: str) -> str:
     now = int(time.time())
@@ -84,7 +89,20 @@ async def current_user(request: Request, authorization: str = Header(None)) -> d
     if tok:
         payload = _decode(tok)
         if payload and payload.get("sub"):
-            u = {"email": payload["sub"], "role": payload.get("role", "viewer")}
+            # re-consult the store so deactivation/role-change take effect immediately —
+            # a signed JWT alone would keep a revoked/demoted user's access until expiry.
+            # Store hiccup (returns None/raises) falls back to the token so a transient DB
+            # blip / in-memory restart doesn't lock everyone out; an explicit inactive
+            # record still revokes (deactivation sets active=False, keeping the record).
+            rec = None
+            try:
+                rec = await store.user_get(payload["sub"])
+            except Exception:
+                rec = None
+            if rec is not None and not rec.get("active", True):
+                raise HTTPException(status_code=401, detail="account deactivated")
+            role = rec.get("role") if rec else payload.get("role", "viewer")
+            u = {"email": payload["sub"], "role": role}
             _user_ctx.set(u); return u
     # secure by default: open (no-auth) admin mode only when EXPLICITLY enabled AND
     # nothing is configured. Production leaves ALLOW_OPEN_DEV unset -> always enforced.

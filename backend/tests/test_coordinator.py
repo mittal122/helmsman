@@ -568,6 +568,44 @@ async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
     assert "error" in types
 
 @pytest.mark.asyncio
+async def test_successful_rollout_resets_breaker(monkeypatch):
+    # a healthy rollout must clear the breaker so it counts CONSECUTIVE failed
+    # remediations, not lifetime ones (else self-healing freezes permanently)
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    brk = breakers_mod.Breaker(max_attempts=2)
+    brk.record("app")                       # one prior failed remediation on this name
+    assert brk.tripped("app") is False
+    bus = EventBus()
+    await coordinator.run(_cfg(mode="autonomous"), bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), brk)
+    assert brk.tripped("app") is False      # still fine, and…
+    brk.record("app"); assert brk.tripped("app") is False   # …count was reset (needs 2 fresh to trip)
+
+@pytest.mark.asyncio
+async def test_approval_resolved_during_emit_is_not_dropped(monkeypatch):
+    # race regression: a fast POST /approve landing during approval_required's emit
+    # awaits must not be dropped (Future is now registered BEFORE the emit)
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    appr = approvals_mod.Approvals()
+    async def racing_append(ev):            # simulate the client resolving mid-emit
+        if ev.get("type") == "approval_required":
+            appr.resolve("app", True)
+    monkeypatch.setattr(coordinator.store, "append_event", racing_append)
+    installed = {"c": False}
+    monkeypatch.setattr(coordinator.deploy, "install",
+                        lambda cfg: installed.__setitem__("c", True))
+    bus = EventBus()
+    # must COMPLETE (not hang on an unresolved Future) and proceed to deploy
+    await asyncio.wait_for(
+        coordinator.run(_cfg(mode="manual"), bus, appr, monitors_mod.Monitors(), breakers_mod.Breaker()),
+        timeout=3)
+    assert installed["c"] is True
+
+@pytest.mark.asyncio
 async def test_git_repo_triggers_build_and_flows_tag_into_pipeline(monkeypatch):
     # deploy-from-source: clone + build + load, then the built tag flows into render/deploy
     _stub_tools(monkeypatch)

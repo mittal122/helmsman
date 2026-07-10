@@ -18,11 +18,14 @@ def scan_image(image: str, threshold: str = "CRITICAL") -> dict:
         r = subprocess.run(
             ["trivy", "image", "--quiet", "--format", "json",
              "--severity", _severities(threshold), "--", image],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=300,
         )
     except FileNotFoundError:
         return {"available": False, "ok": True, "findings": [],
                 "summary": "trivy not installed — scan skipped"}
+    except subprocess.TimeoutExpired:
+        return {"available": True, "ok": True, "findings": [],
+                "summary": "trivy image scan timed out — inconclusive, not a pass"}
     if r.returncode != 0:
         return {"available": True, "ok": True, "findings": [],
                 "summary": f"trivy scan error (rc={r.returncode}): {r.stderr.strip()[:200]} — inconclusive, not a pass"}
@@ -49,11 +52,14 @@ def scan_config(manifests: str) -> dict:
     try:
         r = subprocess.run(
             ["trivy", "config", "--quiet", "--format", "json", "--", d],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=120,
         )
     except FileNotFoundError:
         return {"available": False, "ok": True, "findings": [],
                 "summary": "trivy not installed — config scan skipped"}
+    except subprocess.TimeoutExpired:
+        return {"available": True, "ok": True, "findings": [],
+                "summary": "trivy config scan timed out — advisory skipped"}
     finally:
         try:
             os.unlink(path); os.rmdir(d)

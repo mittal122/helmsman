@@ -200,10 +200,14 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         current = "Approve"
         await emit("stage_enter", "Approve", "Approval stage")
         if mode == "manual":
+            # register the Future BEFORE announcing — else a fast POST /approve during
+            # emit's await points finds no pending entry, drops the approval, and the
+            # deploy hangs forever on a Future nobody will resolve.
+            fut = approvals.create(name)
             await emit("approval_required", "Approve",
                        f"Approve deployment of {name} to {ns}?",
                        {"name": name, "namespace": ns})
-            approved = await approvals.create(name)
+            approved = await fut
             if not approved:
                 await emit("rejected", "Approve", "Deployment rejected by user")
                 return
@@ -287,6 +291,9 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                        f"Pods hit {kinds} during startup but the rollout recovered — all {desired} replicas are ready.")
         await emit("endpoint", "Verify", "Deployment is live", ep)
         await emit("stage_exit", "Verify", "Done")
+        # a healthy rollout clears the auto-remediation breaker so it counts CONSECUTIVE
+        # failed remediations, not lifetime ones (else self-healing freezes forever).
+        breakers.reset(name)
 
         # Monitor (continuous, stoppable)
         current = "Monitor"
@@ -295,6 +302,11 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         monitors.start(name)   # reset any stale stop flag from a prior run of this name
         prev_fail_keys: set = set()
         for _ in range(MONITOR_MAX_CYCLES):
+            # check stop FIRST — a new deploy calls monitors.stop_all() while this loop is
+            # parked in sleep; on wake it must exit before querying/emitting, else a stale
+            # snapshot of the OLD app leaks into the new deploy's live stream.
+            if monitors.is_stopped(name):
+                break
             failures = await asyncio.to_thread(monitor.detect_failures, name, ns)
             metrics = await asyncio.to_thread(monitor.get_metrics, name, ns)
             await emit("health", "Monitor", "Health snapshot",
@@ -304,8 +316,6 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                     await emit("failure", "Monitor", f"{f['type']} on {f['pod']}", f)
                     await explain(f)
             prev_fail_keys = {(f["pod"], f["type"]) for f in failures}
-            if monitors.is_stopped(name):
-                break
             await asyncio.sleep(MONITOR_INTERVAL_S)
         await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:

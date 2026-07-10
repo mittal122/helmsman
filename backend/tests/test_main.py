@@ -34,6 +34,63 @@ def test_rbac_multi_user_flow(monkeypatch):
         # wrong password rejected
         assert c.post("/auth/login", json={"email": "v@x.com", "password": "nope"}).status_code == 401
 
+def _admin_and(c, *users):
+    # create the first admin during the open window, then create the rest with admin auth
+    c.post("/users", json={"email": "admin@x.com", "password": "password1", "role": "admin"})
+    ah = {"Authorization": "Bearer " + c.post("/auth/login",
+          json={"email": "admin@x.com", "password": "password1"}).json()["token"]}
+    for email, role in users:
+        assert c.post("/users", json={"email": email, "password": "password1", "role": role},
+                      headers=ah).status_code == 200
+    return ah
+
+def test_deactivation_revokes_live_jwt_session(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        ah = _admin_and(c, ("op@x.com", "operator"))
+        h = {"Authorization": "Bearer " + c.post("/auth/login",
+             json={"email": "op@x.com", "password": "password1"}).json()["token"]}
+        assert c.get("/auth/me", headers=h).status_code == 200          # token works
+        assert c.delete("/users/op@x.com", headers=ah).status_code == 200
+        assert c.get("/auth/me", headers=h).status_code == 401          # …now revoked live
+
+def test_role_change_takes_effect_on_live_session(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        ah = _admin_and(c, ("op@x.com", "operator"))
+        h = {"Authorization": "Bearer " + c.post("/auth/login",
+             json={"email": "op@x.com", "password": "password1"}).json()["token"]}
+        assert c.post("/monitor/stop", json={"name": "x"}, headers=h).status_code == 200  # operator can
+        c.put("/users/op@x.com/role", json={"role": "viewer"}, headers=ah)                # demote
+        assert c.post("/monitor/stop", json={"name": "x"}, headers=h).status_code == 403  # now denied
+
+def test_last_admin_cannot_be_removed(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        ah = _admin_and(c)   # exactly one admin
+        assert c.delete("/users/admin@x.com", headers=ah).status_code == 400
+        assert c.put("/users/admin@x.com/role", json={"role": "viewer"}, headers=ah).status_code == 400
+
+def test_user_role_missing_user_404(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        ah = _admin_and(c)
+        assert c.put("/users/ghost@x.com/role", json={"role": "viewer"}, headers=ah).status_code == 404
+
+def test_events_requires_viewer_when_auth_on(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        _admin_and(c)                      # a user exists -> auth enforced
+        assert c.get("/events").status_code == 401   # unauthenticated stream blocked
+
+def test_kubeconfig_upload_requires_admin(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        _admin_and(c, ("op@x.com", "operator"))
+        h = {"Authorization": "Bearer " + c.post("/auth/login",
+             json={"email": "op@x.com", "password": "password1"}).json()["token"]}
+        assert c.post("/kubeconfigs", json={"name": "prod", "content": "x"}, headers=h).status_code == 403
+
 def test_deploy_accepts_config_and_returns_id(monkeypatch):
     async def fake_run(cfg, bus, approvals, monitors, breakers):
         return None

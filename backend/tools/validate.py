@@ -3,12 +3,19 @@ import subprocess
 def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
     issues: list[str] = []
 
-    kc = subprocess.run(
-        ["kubeconform", "-strict", "-summary", "-"],
-        input=manifests, capture_output=True, text=True,
-    )
-    if kc.returncode != 0:
-        issues.append("schema: " + (kc.stdout + kc.stderr).strip())
+    # timeout: kubeconform fetches JSON schemas over HTTP; a slow/blocked network must not
+    # hang the whole deploy. Fail closed (append a blocking issue) rather than crash/stall.
+    try:
+        kc = subprocess.run(
+            ["kubeconform", "-strict", "-summary", "-"],
+            input=manifests, capture_output=True, text=True, timeout=30,
+        )
+        if kc.returncode != 0:
+            issues.append("schema: " + (kc.stdout + kc.stderr).strip())
+    except subprocess.TimeoutExpired:
+        issues.append("schema: kubeconform timed out (schema fetch/network) — inconclusive, not a pass")
+    except FileNotFoundError:
+        issues.append("schema: kubeconform not installed — cannot validate manifests")
 
     # ponytail: don't pin -n; target namespace may not exist yet (created at deploy via helm --create-namespace)
     try:
@@ -41,11 +48,16 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
     for t in _KS_IGNORE:
         ks_cmd += ["--ignore-test", t]
     ks_cmd.append("-")
-    ks = subprocess.run(ks_cmd, input=manifests, capture_output=True, text=True)
-    criticals = [ln for ln in ks.stdout.splitlines() if "[CRITICAL]" in ln]
-    if criticals:
-        issues.append("kube-score: " + "; ".join(criticals))
-    if ks.returncode not in (0, 1) and not criticals:
-        issues.append("kube-score: exec error: " + ks.stderr.strip())
+    try:
+        ks = subprocess.run(ks_cmd, input=manifests, capture_output=True, text=True, timeout=30)
+        criticals = [ln for ln in ks.stdout.splitlines() if "[CRITICAL]" in ln]
+        if criticals:
+            issues.append("kube-score: " + "; ".join(criticals))
+        if ks.returncode not in (0, 1) and not criticals:
+            issues.append("kube-score: exec error: " + ks.stderr.strip())
+    except subprocess.TimeoutExpired:
+        issues.append("kube-score: timed out — inconclusive, not a pass")
+    except FileNotFoundError:
+        issues.append("kube-score: not installed — cannot score manifests")
 
     return (len(issues) == 0, issues)

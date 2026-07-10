@@ -70,7 +70,11 @@ def stop_all() -> None:
 def reap(ttl: float = 30.0) -> list[str]:
     """Stop every forward not heartbeated within `ttl` seconds. Returns the keys reaped."""
     now = time.monotonic()
-    dead = [k for k, t in list(_seen.items()) if now - t > ttl]
+    # reap both TTL-expired forwards AND ones whose kubectl child already exited on its own
+    # (pod deleted / connection dropped) — else a self-exited Popen lingers while the UI
+    # keeps heart-beating its key.
+    dead = [k for k, t in list(_seen.items())
+            if now - t > ttl or (k in _procs and _procs[k].poll() is not None)]
     for k in dead:
         stop(k)
     return dead

@@ -14,10 +14,15 @@ def _check(name: str, namespace: str) -> None:
 
 def get_revisions(name: str, namespace: str) -> list[dict]:
     _check(name, namespace)
-    r = subprocess.run(
-        ["helm", "history", name, "-n", namespace, "-o", "json"],
-        capture_output=True, text=True,
-    )
+    # timeout: this runs on the auto-remediate path, which fires exactly when the cluster
+    # is likely unhealthy/unreachable — it must not hang forever. Empty => caller escalates.
+    try:
+        r = subprocess.run(
+            ["helm", "history", name, "-n", namespace, "-o", "json"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if r.returncode != 0 or not r.stdout.strip():
         return []
     try:
@@ -44,8 +49,10 @@ def previous_good_revision(revisions: list[dict]) -> int | None:
 
 def do_rollback(name: str, namespace: str, revision: int) -> None:
     _check(name, namespace)
+    # subprocess timeout (>helm's --timeout 120s) hard-kills helm if it wedges before
+    # honoring its own timeout (e.g. blocked on the initial API dial).
     subprocess.run(
         ["helm", "rollback", name, str(revision), "-n", namespace,
          "--wait", "--timeout", "120s"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=150,
     )

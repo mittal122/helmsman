@@ -60,9 +60,13 @@ def get_metrics(name: str, namespace: str) -> list[dict]:
 
 # ponytail: interface-locked for a later logs UI; not wired into the coordinator yet
 def get_logs(name: str, namespace: str, tail: int = 20) -> str:
-    r = subprocess.run(
-        ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",
-         "-n", namespace, "--tail", str(tail), "--all-containers", "--prefix"],
-        capture_output=True, text=True,
-    )
+    try:
+        r = subprocess.run(
+            ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",
+             "-n", namespace, "--tail", str(tail), "--all-containers", "--prefix",
+             "--request-timeout=10s"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return r.stdout if r.returncode == 0 else ""
