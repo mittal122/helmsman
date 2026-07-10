@@ -30,3 +30,19 @@ def test_dedup_by_problem():
 def test_accepts_single_string():
     g = diagnostics.diagnose("Validate", "kube-score: Image with latest tag")
     assert g["items"][0]["problem"] == "Your image has no pinned version tag"
+
+def test_fix_prompt_is_ai_ready_and_self_contained():
+    g = diagnostics.diagnose("Validate",
+        ["kube-score: [CRITICAL] (apex) Image with latest tag"],
+        {"name": "apex", "image": "apex", "namespace": "prod"})
+    fp = g["fix_prompt"]
+    # includes the context an outside AI can't otherwise know
+    assert "App name: apex" in fp and "Container image: apex" in fp and "Namespace: prod" in fp
+    assert "Stage that failed: Validate" in fp
+    # includes the verbatim checker output + the diagnosis + a concrete ask
+    assert "Image with latest tag" in fp
+    assert "Problem:" in fp and "Suggested fix:" in fp and "What I need from you" in fp
+
+def test_fix_prompt_without_context_still_valid():
+    g = diagnostics.diagnose("Scan", ["trivy: CVE-2024-1 critical"])
+    assert "(your app)" in g["fix_prompt"] and "What I need from you" in g["fix_prompt"]

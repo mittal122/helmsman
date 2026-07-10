@@ -51,7 +51,8 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Self-healing "guide" rung: a break we can't auto-fix still gets clear,
         # actionable guidance so the user knows exactly what to change. Deterministic
         # catalog first (always works); LLM error-resolver enriches it best-effort.
-        g = diagnostics.diagnose(stage, issues)
+        g = diagnostics.diagnose(stage, issues,
+                                 {"name": name, "image": cfg.get("image", ""), "namespace": ns})
         try:
             ctx = {"failure_type": f"{stage}Failed", "pod_status": "",
                    "recent_events": "; ".join(str(i) for i in (issues if isinstance(issues, list) else [issues])),

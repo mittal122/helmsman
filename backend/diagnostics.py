@@ -100,8 +100,46 @@ def _one(issue: str) -> dict:
             "fix": "Adjust your image or config to satisfy the check, then deploy again.",
             "checker": _checker(issue), "raw": issue}
 
-def diagnose(stage: str, issues) -> dict:
-    """issues: a list[str] of checker messages, or a single string."""
+def build_fix_prompt(stage: str, context: dict, items: list, issues: list) -> str:
+    """A self-contained, copy-pasteable prompt the user can hand to ANY AI/coding
+    assistant so it can fix the issue in their project. Includes the context an
+    outside AI can't otherwise know (app, image, exact checker output)."""
+    c = context or {}
+    name = c.get("name") or "(your app)"
+    image = c.get("image") or "(your image)"
+    ns = c.get("namespace") or "default"
+    L = []
+    L.append("You are helping me fix a Kubernetes deployment that was blocked by an "
+             "automated check. I deploy a prebuilt container image to Kubernetes using "
+             "a Helm chart. Read the details below and tell me the exact changes to make "
+             "in my project to fix it.")
+    L.append("")
+    L.append("## Context")
+    L.append(f"- App name: {name}")
+    L.append(f"- Container image: {image}")
+    L.append(f"- Namespace: {ns}")
+    L.append(f"- Stage that failed: {stage}")
+    L.append("")
+    L.append("## What the automated checks reported (verbatim)")
+    for i in (issues or []):
+        L.append(f"- {i}")
+    L.append("")
+    L.append("## Diagnosis")
+    for it in items:
+        L.append(f"- Problem: {it['problem']}")
+        L.append(f"  - Why it's blocked: {it['cause']}")
+        L.append(f"  - Suggested fix: {it['fix']}")
+    L.append("")
+    L.append("## What I need from you")
+    L.append("Give me the concrete change to make — the exact image tag/reference, "
+             "Dockerfile edit, Helm value, or Kubernetes manifest field — with the "
+             "specific commands or file diffs. Be precise and minimal; assume I will "
+             "re-run the deploy after applying your change.")
+    return "\n".join(L)
+
+def diagnose(stage: str, issues, context: dict = None) -> dict:
+    """issues: a list[str] of checker messages, or a single string.
+    context (optional): {name, image, namespace} — used to build the AI fix-prompt."""
     if isinstance(issues, str):
         issues = [issues]
     issues = [i for i in (issues or []) if i and str(i).strip()]
@@ -120,13 +158,17 @@ def diagnose(stage: str, issues) -> dict:
         "summary": f"{n} issue{'s' if n != 1 else ''} to fix before I can deploy — I can't safely auto-fix {'these' if n != 1 else 'this'} for you.",
         "items": items,
         "auto_fixable": False,
+        "fix_prompt": build_fix_prompt(stage, context, items, issues),
     }
 
 
 if __name__ == "__main__":
-    g = diagnose("Validate", ["kube-score: [CRITICAL] apex apps/v1/Deployment: (apex) Image with latest tag"])
+    g = diagnose("Validate", ["kube-score: [CRITICAL] apex apps/v1/Deployment: (apex) Image with latest tag"],
+                 {"name": "apex", "image": "apex", "namespace": "default"})
     assert g["items"][0]["problem"] == "Your image has no pinned version tag", g
     assert "1.4.2" in g["items"][0]["fix"]
+    assert "Container image: apex" in g["fix_prompt"] and "verbatim" in g["fix_prompt"]
+    assert "Image with latest tag" in g["fix_prompt"]  # includes the raw checker output
     g2 = diagnose("Validate", ["schema: could not find schema for CronWidget"])
     assert "Kind/apiVersion" in g2["items"][0]["problem"], g2
     g3 = diagnose("Validate", ["some brand new checker message"])

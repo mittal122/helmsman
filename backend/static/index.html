@@ -136,6 +136,24 @@
   .gitem .chk{font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;margin-top:5px}
   .gfoot{font-size:11px;color:var(--faint);margin-top:2px}
   .ai-note{margin-top:8px;border-left:2px solid var(--violet);padding:2px 10px;font-size:12px;color:#cbb8f0}
+  .fpwrap{margin-top:10px}
+  .fprow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .fpbtn{background:linear-gradient(180deg,var(--teal2),#20b6a4);color:#04211d;border:0;border-radius:8px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer}
+  .fpbtn:hover{filter:brightness(1.06)}
+  .fptog{font-size:11.5px;color:var(--teal);cursor:pointer}
+  .fppre{display:none;margin-top:8px;background:#0b1218;border:1px solid var(--line2);border-radius:8px;padding:10px;font-size:11.5px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#cfe3df}
+  .fppre.on{display:block}
+
+  /* progress bar */
+  .prog{flex:0 0 auto;padding:9px 18px 8px;border-bottom:1px solid var(--line);background:rgba(12,19,26,.55)}
+  .pseg-row{display:flex;gap:4px}
+  .pseg{flex:1;height:7px;border-radius:4px;background:var(--panel2);position:relative;overflow:hidden;transition:background .3s}
+  .pseg.done,.pseg.active{background:linear-gradient(90deg,var(--tealdim),var(--teal))}
+  .pseg.active:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);animation:sheen 1.1s linear infinite}
+  @keyframes sheen{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+  .pseg.failed{background:linear-gradient(90deg,#7a2d2d,var(--red))}
+  .plabel{display:flex;justify-content:space-between;margin-top:6px;font-size:11.5px;color:var(--dim)}
+  .plabel b{color:var(--teal)} .plabel .r{color:var(--faint)}
 
   /* inspector */
   .insp-hd{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex:0 0 auto}
@@ -179,6 +197,11 @@
     </div>
     <button class="kbtn" id="settings-btn" title="Operator token">🔑</button>
   </header>
+
+  <div class="prog" id="prog">
+    <div class="pseg-row" id="pseg"></div>
+    <div class="plabel"><span id="plabel-t">Idle — no deployment running</span><span class="r" id="plabel-pct"></span></div>
+  </div>
 
   <div class="grid">
     <!-- controls -->
@@ -312,6 +335,26 @@
   function place(id){var o=N[id];o.node.style.left=o.x+"px";o.node.style.top=o.y+"px";}
   window.addEventListener("resize",layout);
 
+  // ---- progress bar (8 pipeline stages) ----
+  var STAGE_LIST=["Detect","Generate","Validate","Approve","Scan","Deploy","Verify","Monitor"];
+  var pseg={}, psegRow=$("pseg");
+  STAGE_LIST.forEach(function(s){var g=el("div","pseg");g.title=s;psegRow.appendChild(g);pseg[s]=g;});
+  function setSeg(stage,st){var g=pseg[stage];if(!g)return;g.className="pseg"+(st?" "+st:"");}
+  function progLabel(stage,blocked){
+    var done=0; STAGE_LIST.forEach(function(s){if(pseg[s].classList.contains("done"))done++;});
+    var i=STAGE_LIST.indexOf(stage);
+    $("plabel-t").textContent = blocked? ("Blocked at "+stage+" — action needed")
+      : (stage? ("Step "+(i+1)+" of "+STAGE_LIST.length+"  ·  "+stage) : "Idle — no deployment running");
+    $("plabel-pct").textContent = Math.round(done/STAGE_LIST.length*100)+"%";
+  }
+  function progEnter(stage){
+    var i=STAGE_LIST.indexOf(stage);
+    for(var k=0;k<i;k++) if(!pseg[STAGE_LIST[k]].classList.contains("failed")) setSeg(STAGE_LIST[k],"done");
+    if(i>=0) setSeg(stage,"active");
+    progLabel(stage,false);
+  }
+  function progReset(){STAGE_LIST.forEach(function(s){setSeg(s,null);});$("plabel-t").textContent="Starting — routing work…";$("plabel-pct").textContent="0%";}
+
   // ---- actor inference: which node owns this event ----
   function actorFor(ev){
     var t=ev.type, s=ev.stage;
@@ -360,6 +403,7 @@
     if(ev.type==="guidance" && ev.data){
       (ev.data.items||[]).forEach(function(it){ bd.appendChild(guideItem(it)); });
       if(ev.data.ai&&(ev.data.ai.root_cause||ev.data.ai.recommended_action)) bd.appendChild(aiNote(ev.data.ai));
+      if(ev.data.fix_prompt) bd.appendChild(fixPromptBlock(ev.data.fix_prompt));
     }
     if(ev.type==="scan" && ev.data && ev.data.image && (ev.data.image.findings||[]).length){
       ev.data.image.findings.slice(0,6).forEach(function(f){
@@ -409,12 +453,26 @@
     if(ai.recommended_action) n.appendChild(el("div",null,"Fix: "+ai.recommended_action));
     return n;
   }
+  function fixPromptBlock(fp){
+    var w=el("div","fpwrap");
+    var btn=el("button","fpbtn","📋 Copy fix-prompt for an AI");
+    var tog=el("span","fptog","▸ view prompt");
+    var pre=el("pre","fppre",fp);
+    btn.addEventListener("click",function(){
+      if(navigator.clipboard) navigator.clipboard.writeText(fp);
+      btn.textContent="✓ Copied — paste into any AI"; setTimeout(function(){btn.textContent="📋 Copy fix-prompt for an AI";},2500);
+    });
+    tog.addEventListener("click",function(){pre.classList.toggle("on");tog.textContent=pre.classList.contains("on")?"▾ hide prompt":"▸ view prompt";});
+    var row=el("div","fprow"); row.appendChild(btn); row.appendChild(tog);
+    w.appendChild(row); w.appendChild(pre); return w;
+  }
   function showGuide(ev){
     var g=ev.data||{};
     $("guide-sum").textContent=g.summary||ev.message||"Here's how to fix it";
     var body=$("guide-body"); body.textContent="";
     (g.items||[]).forEach(function(it){ body.appendChild(guideItem(it)); });
     if(g.ai&&(g.ai.root_cause||g.ai.recommended_action)) body.appendChild(aiNote(g.ai));
+    if(g.fix_prompt) body.appendChild(fixPromptBlock(g.fix_prompt));
     $("guide").classList.add("on");
     selectNode("error-resolver");
   }
@@ -431,11 +489,11 @@
     var o=N[id]; o.ev.push(ev); timeline.push(ev); touchCount(id);
     N.coordinator.node.dataset.st = (ev.type==="error")?"error":"active";
 
-    if(ev.type==="stage_enter"){ setNodeStatus(id,"active"); setStatus("working",SAY[ev.stage]||("Working on "+ev.stage+"…")); }
-    else if(ev.type==="stage_exit"){ if(o.status!=="error") setNodeStatus(id,"done"); }
-    else if(ev.type==="error"){ setNodeStatus(id,"error"); setStatus("error", ev.message); }
+    if(ev.type==="stage_enter"){ setNodeStatus(id,"active"); progEnter(ev.stage); setStatus("working",SAY[ev.stage]||("Working on "+ev.stage+"…")); }
+    else if(ev.type==="stage_exit"){ if(o.status!=="error") setNodeStatus(id,"done"); setSeg(ev.stage,"done"); progLabel(ev.stage,false); }
+    else if(ev.type==="error"){ setNodeStatus(id,"error"); setSeg(ev.stage,"failed"); progLabel(ev.stage,true); setStatus("error", ev.message); }
     else if(ev.type==="escalation"){ setNodeStatus(id,"error"); setStatus("error","Needs a human."); }
-    else if(ev.type==="endpoint"){ setNodeStatus(id,"done"); setStatus("live","You're live 🎉 — healthy."); chip("ep",(ev.data&&ev.data.service)||"live"); }
+    else if(ev.type==="endpoint"){ setNodeStatus(id,"done"); setSeg("Verify","done"); progLabel("Verify",false); setStatus("live","You're live 🎉 — healthy."); chip("ep",(ev.data&&ev.data.service)||"live"); }
     else if(ev.type==="remediation"){ setNodeStatus(id,"active"); }
     else if(ev.type==="guidance"){ setNodeStatus("error-resolver","active");
       setStatus("waiting","Blocked — I can't auto-fix this. Here's how to fix it →"); showGuide(ev); }
@@ -502,7 +560,7 @@
   }
   $("f").onsubmit=function(ev){ ev.preventDefault();
     var fd=new FormData(ev.target); curName=fd.get("name"); curNs=fd.get("namespace")||"default";
-    reset(); N.coordinator.node.dataset.st="active"; setStatus("working","Starting — routing work to the tools…");
+    reset(); progReset(); N.coordinator.node.dataset.st="active"; setStatus("working","Starting — routing work to the tools…");
     fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
       name:fd.get("name"),image:fd.get("image"),namespace:fd.get("namespace"),
       port:Number(fd.get("port")),replicas:Number(fd.get("replicas")),mode:fd.get("mode"),
