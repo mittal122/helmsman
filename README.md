@@ -80,6 +80,19 @@ docker compose up --build
 ```
 Mounts your `~/.kube/config` read-only so it can reach your cluster.
 
+## Portability
+
+| Target | How | Status |
+|---|---|---|
+| Linux / macOS / WSL2, **any CPU** | `./setup.sh` (host: Python + arch-correct CLIs) | ✅ tested |
+| Any OS with Docker | `docker compose up --build` (builds native for your arch) | ✅ tested |
+| Send one file → amd64 machine | `./scripts/package.sh` → `helmsman-image.tar.gz` | ✅ tested |
+| Send one file → Apple Silicon / ARM | `./scripts/package.sh helmsman:1.0 linux/arm64` | ✅ cross-arch build supported |
+| Windows (native) | `setup.bat` (winget) | ⚠️ best-effort; use WSL2 + `./setup.sh` for the tested path |
+
+No hardcoded paths or secrets; all config via env. Needs only Docker + a Kubernetes
+cluster (the setup scripts create a local one for you).
+
 ## Configuration (env vars)
 
 | Var | Effect |

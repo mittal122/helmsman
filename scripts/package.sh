@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Package Helmsman into ONE portable file you can send to anyone.
 # The receiver needs only Docker — no source, no Python, no kubectl/helm/trivy, no internet.
-#   ./scripts/package.sh            -> helmsman-image.tar.gz
-#   ./scripts/package.sh myrepo:tag -> custom tag
+#   ./scripts/package.sh                          -> tar for THIS machine's CPU arch
+#   ./scripts/package.sh helmsman:1.0 linux/arm64 -> tar for Apple Silicon / ARM (cross-built)
+#   ./scripts/package.sh myrepo:tag               -> custom tag
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TAG="${1:-helmsman:1.0}"
+PLATFORM="${2:-}"
 OUT="helmsman-image.tar.gz"
 
-echo "==> Building image $TAG (context is lean thanks to .dockerignore)…"
-docker build -t "$TAG" .
+if [ -n "$PLATFORM" ]; then
+  echo "==> Cross-building $TAG for $PLATFORM (enabling emulation)…"
+  docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null 2>&1 || true
+  docker buildx build --platform "$PLATFORM" -t "$TAG" --load .
+else
+  echo "==> Building image $TAG for this machine ($(uname -m))…"
+  docker build -t "$TAG" .
+fi
 
 echo "==> Saving to $OUT …"
 docker save "$TAG" | gzip > "$OUT"

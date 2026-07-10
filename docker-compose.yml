@@ -29,7 +29,7 @@ services:
       KUBECONFIG_ENC_KEY: ${KUBECONFIG_ENC_KEY:-}     # Fernet key to enable the encrypted kubeconfig store
       KUBECONFIG: /home/appuser/.kube/config
     volumes:
-      - ${KUBECONFIG:-~/.kube/config}:/home/appuser/.kube/config:ro
+      - ${KUBECONFIG:-${HOME}/.kube/config}:/home/appuser/.kube/config:ro
     ports:
       - "8000:8000"
 
