@@ -2,178 +2,481 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Helmsman</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman — AI deployment engineer</title>
 <style>
-  body { font-family: ui-monospace, Menlo, monospace; background:#0d1319; color:#e9eff3; margin:0; padding:24px; }
-  h1 { font-size:1.1rem; color:#2dd4bf; }
-  form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
-  input { background:#141d26; border:1px solid #25323d; color:#e9eff3; padding:6px 8px; border-radius:6px; }
-  button { background:#2dd4bf; color:#0d1319; border:0; padding:6px 14px; border-radius:6px; font-weight:700; cursor:pointer; }
-  #log { background:#141d26; border:1px solid #25323d; border-radius:10px; padding:12px; height:60vh; overflow:auto; }
-  .ev { padding:3px 0; border-bottom:1px solid #1b2731; font-size:.85rem; }
-  .stage { color:#60a5fa; } .error { color:#f87171; } .endpoint { color:#34d399; }
-  .t { color:#647585; }
+  :root{
+    --bg:#0a0f14; --bg2:#0d141b; --panel:#111a23; --panel2:#152029;
+    --line:#1e2c38; --line2:#283a49; --ink:#e9eff3; --dim:#8397a8; --faint:#5b6d7d;
+    --teal:#2dd4bf; --teal-dim:#1b7f74; --blue:#60a5fa; --green:#34d399;
+    --amber:#fbbf24; --red:#f87171; --violet:#a78bfa;
+    --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 80% -10%,#0f2b2b 0%,transparent 60%),
+               radial-gradient(1000px 500px at -10% 110%,#10233a 0%,transparent 55%),
+               var(--bg);
+    color:var(--ink); font-size:14px; line-height:1.5;
+  }
+  code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  a{color:var(--teal)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#22323f;border-radius:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ---- top bar ---- */
+  header{
+    display:flex;align-items:center;gap:14px;padding:14px 20px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(20,32,41,.9),rgba(13,20,27,.6));
+    backdrop-filter:blur(8px);position:sticky;top:0;z-index:20;
+  }
+  .orb{position:relative;width:40px;height:40px;flex:0 0 auto}
+  .orb .core{
+    position:absolute;inset:6px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#7ff3e6,#2dd4bf 55%,#0f766e);
+    box-shadow:0 0 18px rgba(45,212,191,.6);
+  }
+  .orb .ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(45,212,191,.5);opacity:0}
+  body.working .orb .ring{animation:ping 1.8s cubic-bezier(0,0,.2,1) infinite}
+  body.working .orb .ring:nth-child(2){animation-delay:.6s}
+  @keyframes ping{0%{transform:scale(.7);opacity:.7}80%,100%{transform:scale(1.9);opacity:0}}
+  .who{display:flex;flex-direction:column;line-height:1.15}
+  .who b{font-size:15px;letter-spacing:.2px}
+  .who small{color:var(--dim);font-size:11.5px}
+  .status{margin-left:6px;display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:999px;
+    background:var(--panel);border:1px solid var(--line2);font-size:12.5px;font-weight:600}
+  .status .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+  .status[data-s="working"]{color:var(--teal);border-color:var(--teal-dim)}
+  .status[data-s="working"] .dot{background:var(--teal);animation:blink 1s infinite}
+  .status[data-s="waiting"]{color:var(--amber);border-color:#78591a}
+  .status[data-s="waiting"] .dot{background:var(--amber);animation:blink 1s infinite}
+  .status[data-s="live"]{color:var(--green);border-color:#1c6b4e}
+  .status[data-s="live"] .dot{background:var(--green)}
+  .status[data-s="error"]{color:var(--red);border-color:#7a2d2d}
+  .status[data-s="error"] .dot{background:var(--red)}
+  @keyframes blink{50%{opacity:.25}}
+  .spacer{flex:1}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{display:none;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;font-size:12px;
+    background:var(--panel);border:1px solid var(--line2);color:var(--dim);max-width:340px}
+  .chip.on{display:inline-flex}
+  .chip b{color:var(--ink);font-weight:600}
+  .chip.ep{border-color:#1c6b4e} .chip.ep b{color:var(--green)}
+  .chip.cost b{color:var(--teal)}
+  .icon-btn{background:var(--panel);border:1px solid var(--line2);color:var(--dim);
+    width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:15px}
+  .icon-btn:hover{color:var(--ink);border-color:var(--teal-dim)}
+
+  /* ---- layout ---- */
+  main{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:18px 20px;max-width:1400px;margin:0 auto}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);
+    border-radius:14px;box-shadow:var(--shadow)}
+  .card h2{margin:0;padding:13px 16px;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;
+    color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .card .body{padding:14px 16px}
+  .side{display:flex;flex-direction:column;gap:16px}
+
+  /* ---- form ---- */
+  label{display:block;font-size:11.5px;color:var(--dim);margin:10px 0 4px;font-weight:600;letter-spacing:.3px}
+  input,select{width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);
+    padding:9px 11px;border-radius:9px;font-size:13.5px;font-family:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(45,212,191,.12)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .btn{width:100%;background:linear-gradient(180deg,#33e0cb,#20b6a4);color:#04211d;border:0;
+    padding:11px;border-radius:10px;font-weight:800;font-size:14px;cursor:pointer;margin-top:14px;
+    letter-spacing:.3px;transition:transform .06s,filter .2s}
+  .btn:hover{filter:brightness(1.06)} .btn:active{transform:translateY(1px)}
+  .btn.ghost{background:transparent;border:1px solid var(--line2);color:var(--dim);font-weight:600}
+  .btn.ghost:hover{color:var(--ink);border-color:var(--teal-dim)}
+  .btn.danger{background:transparent;border:1px solid #7a2d2d;color:var(--red);font-weight:700}
+  .btn.danger:hover{background:rgba(248,113,113,.08)}
+  details.tool{border:1px solid var(--line);border-radius:10px;margin-top:12px;background:var(--bg2)}
+  details.tool summary{cursor:pointer;padding:10px 12px;font-size:12.5px;color:var(--teal);font-weight:600;list-style:none}
+  details.tool summary::-webkit-details-marker{display:none}
+  details.tool summary:before{content:"＋ ";color:var(--faint)}
+  details.tool[open] summary:before{content:"－ "}
+  details.tool .inner{padding:0 12px 12px}
+  .out{white-space:pre-wrap;color:var(--dim);font-size:12.5px;margin-top:8px;max-height:180px;overflow:auto}
+  .inline{display:flex;gap:8px} .inline>*{margin-top:0}
+
+  /* ---- pipeline rail ---- */
+  .rail{display:flex;gap:0;overflow-x:auto;padding:6px 4px 2px}
+  .step{flex:1 0 auto;min-width:96px;display:flex;flex-direction:column;align-items:center;position:relative;padding:4px 6px 2px}
+  .step:not(:first-child):before{content:"";position:absolute;left:-50%;top:16px;width:100%;height:2px;
+    background:var(--line2);z-index:0}
+  .step.done:before,.step.active:before{background:linear-gradient(90deg,var(--teal),var(--teal-dim))}
+  .node{width:32px;height:32px;border-radius:50%;background:var(--panel2);border:2px solid var(--line2);
+    display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--faint);z-index:1;
+    transition:all .3s}
+  .step.done .node{border-color:var(--teal);color:var(--teal);background:rgba(45,212,191,.1)}
+  .step.active .node{border-color:var(--teal);color:#04211d;
+    background:radial-gradient(circle at 35% 30%,#7ff3e6,#2dd4bf);box-shadow:0 0 0 4px rgba(45,212,191,.16);
+    animation:pulse 1.4s infinite}
+  .step.failed .node{border-color:var(--red);color:var(--red);background:rgba(248,113,113,.12)}
+  .step.active .node .sp{width:12px;height:12px;border:2px solid #04211d;border-top-color:transparent;
+    border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(45,212,191,.16)}50%{box-shadow:0 0 0 8px rgba(45,212,191,.05)}}
+  .step small{margin-top:7px;font-size:10.5px;color:var(--faint);letter-spacing:.4px;text-transform:uppercase;font-weight:600}
+  .step.done small,.step.active small{color:var(--dim)}
+  .step.active small{color:var(--teal)}
+
+  /* ---- activity feed ---- */
+  #feed{height:calc(100vh - 320px);min-height:340px;overflow:auto;padding:8px 4px}
+  .msg{display:flex;gap:11px;padding:9px 8px;border-radius:12px;animation:rise .28s ease both}
+  .msg:hover{background:rgba(255,255,255,.02)}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .av{flex:0 0 auto;width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    font-size:14px;background:var(--panel2);border:1px solid var(--line2)}
+  .mb{flex:1;min-width:0}
+  .meta{font-size:10.5px;color:var(--faint);margin-bottom:1px;letter-spacing:.3px}
+  .meta .stg{color:var(--blue);font-weight:700;text-transform:uppercase}
+  .txt{font-size:13.5px;word-wrap:break-word}
+  .msg.k-error .av,.msg.k-failure .av,.msg.k-escalation .av{border-color:#7a2d2d;color:var(--red)}
+  .msg.k-endpoint .av,.msg.k-remediation .av{border-color:#1c6b4e;color:var(--green)}
+  .msg.k-explanation .av{border-color:#5b4b8a;color:var(--violet)}
+  .msg.k-approval_required .av{border-color:#78591a;color:var(--amber)}
+  .msg.k-error .txt,.msg.k-escalation .txt{color:#fca5a5}
+  .cursor:after{content:"▋";color:var(--teal);animation:blink 1s infinite;margin-left:2px}
+
+  /* ---- rich cards inside feed ---- */
+  .rc{margin-top:8px;border:1px solid var(--line2);border-radius:10px;background:var(--bg2);overflow:hidden}
+  .rc .hd{padding:8px 11px;font-size:11.5px;color:var(--dim);border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center}
+  .rc pre{margin:0;padding:11px;font-size:12px;max-height:280px;overflow:auto;color:#cfe3df}
+  details.yaml summary{cursor:pointer;padding:9px 11px;font-size:12.5px;color:var(--teal);font-weight:600;list-style:none}
+  details.yaml summary::-webkit-details-marker{display:none}
+  details.yaml summary:before{content:"▸ "}details.yaml[open] summary:before{content:"▾ "}
+  .cmd{padding:10px 12px;background:#0b1218;color:var(--green);font-size:12.5px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .copy{background:var(--panel2);border:1px solid var(--line2);color:var(--dim);border-radius:6px;
+    padding:3px 9px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .copy:hover{color:var(--ink)}
+  .bar{height:8px;border-radius:6px;background:var(--panel2);overflow:hidden;margin-top:7px}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--green));transition:width .5s}
+  .find{display:flex;gap:8px;align-items:center;padding:6px 11px;border-top:1px solid var(--line);font-size:12.5px}
+  .sev{font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.5px;flex:0 0 auto}
+  .sev.CRITICAL{background:#4c1414;color:#fca5a5} .sev.HIGH{background:#4a2a10;color:#fbbf24}
+  .sev.MEDIUM{background:#123a3a;color:#67e8f9} .sev.LOW,.sev.UNKNOWN{background:#22323f;color:var(--dim)}
+  .badge{display:inline-block;padding:3px 10px;border-radius:8px;font-weight:800;font-size:13px}
+  .badge.money{background:rgba(45,212,191,.12);color:var(--teal)}
+  .ask{display:flex;gap:9px;margin-top:10px}
+  .ask button{flex:1;padding:9px;border-radius:9px;border:0;font-weight:700;cursor:pointer}
+  .ask .yes{background:linear-gradient(180deg,#33e0cb,#20b6a4);color:#04211d}
+  .ask .no{background:transparent;border:1px solid #7a2d2d;color:var(--red)}
+
+  /* ---- live monitor strip ---- */
+  #mon{display:none;margin-top:14px}
+  .met{display:flex;justify-content:space-between;padding:7px 11px;border-top:1px solid var(--line);font-size:12.5px}
+  .met .mono{color:var(--dim)}
+  .empty{padding:26px 16px;text-align:center;color:var(--faint);font-size:13px}
+  .empty .big{font-size:26px;display:block;margin-bottom:8px;opacity:.6}
 </style>
 </head>
 <body>
-  <h1>⎈ Helmsman — live deployment</h1>
-  <details style="margin-bottom:12px"><summary>Not containerized? Get a setup prompt</summary>
-    <input id="ob-desc" placeholder="describe your app (e.g. node express api on 3000)" style="width:60%">
-    <button id="ob-btn">Get prompt</button>
-    <pre id="ob-out" style="white-space:pre-wrap;color:#93a4b3"></pre>
-  </details>
-  <details style="margin-bottom:12px"><summary>Suggest config for me</summary>
-    <input id="ca-name" placeholder="name"><input id="ca-image" placeholder="image"><button id="ca-btn">Suggest</button>
-    <pre id="ca-out" style="white-space:pre-wrap;color:#93a4b3"></pre>
-  </details>
-  <form id="f">
-    <input id="token" type="password" placeholder="operator token (optional)">
-    <input name="name" placeholder="name" value="demo" required>
-    <input name="image" placeholder="image" value="mendhak/http-https-echo:31" required>
-    <input name="namespace" placeholder="namespace" value="default">
-    <input name="port" placeholder="port" value="8080" type="number">
-    <input name="replicas" placeholder="replicas" value="2" type="number">
-    <input name="cluster" list="cluster-list" placeholder="cluster (blank = local kind)">
-    <datalist id="cluster-list"></datalist>
-    <select name="mode"><option value="manual">Manual</option><option value="autonomous">Autonomous</option></select>
-    <span style="margin-left:8px">
-      <input id="rb-rev" type="number" placeholder="rev" style="width:60px">
-      <button id="rb-btn" type="button" style="background:#f87171">Rollback</button>
-    </span>
-    <input name="env" placeholder="env KEY=VAL,KEY2=VAL2">
-    <input name="secrets" placeholder="secrets KEY=VAL (redacted)">
-    <button type="submit">Deploy</button>
-  </form>
-  <div id="approve" style="display:none;margin:10px 0;padding:10px;border:1px solid #2dd4bf;border-radius:8px">
-    <span id="approve-msg"></span>
-    <button id="btn-approve" style="background:#2dd4bf">Approve</button>
-    <button id="btn-reject" style="background:#f87171">Reject</button>
-  </div>
-  <div id="log"></div>
-  <div id="monitor" style="display:none;margin-top:12px;padding:10px;border:1px solid #25323d;border-radius:8px">
-    <b>Monitoring</b> <button id="btn-stop" style="background:#f87171;float:right">Stop</button>
-    <div id="failures" style="color:#f87171;margin:6px 0"></div>
-    <div id="metrics" style="font-family:monospace;font-size:.8rem;color:#93a4b3"></div>
-  </div>
+  <header>
+    <div class="orb"><span class="ring"></span><span class="ring"></span><span class="core"></span></div>
+    <div class="who"><b>Helmsman</b><small>your AI deployment engineer</small></div>
+    <div class="status" id="status" data-s="idle"><span class="dot"></span><span id="status-t">Idle — ready</span></div>
+    <div class="spacer"></div>
+    <div class="chips">
+      <span class="chip cost" id="chip-cost">💰 <b id="chip-cost-v"></b></span>
+      <span class="chip" id="chip-health">💓 <b id="chip-health-v"></b></span>
+      <span class="chip ep" id="chip-ep">🌐 <b id="chip-ep-v"></b></span>
+    </div>
+    <button class="icon-btn" id="settings-btn" title="Operator token">🔑</button>
+  </header>
+
+  <main>
+    <!-- control column -->
+    <section class="side">
+      <div class="card">
+        <h2>🚀 New deployment</h2>
+        <div class="body">
+          <form id="f">
+            <div id="settings" style="display:none">
+              <label>Operator token (optional)</label>
+              <input id="token" type="password" placeholder="sent as Bearer on every action">
+            </div>
+            <label>App name</label>
+            <input name="name" value="demo" required>
+            <label>Container image</label>
+            <input name="image" value="mendhak/http-https-echo:31" required>
+            <div class="row2">
+              <div><label>Namespace</label><input name="namespace" value="default"></div>
+              <div><label>Cluster</label><input name="cluster" list="cluster-list" placeholder="local kind"><datalist id="cluster-list"></datalist></div>
+            </div>
+            <div class="row2">
+              <div><label>Port</label><input name="port" value="8080" type="number"></div>
+              <div><label>Replicas</label><input name="replicas" value="2" type="number"></div>
+            </div>
+            <label>Mode</label>
+            <select name="mode">
+              <option value="manual">Manual — I approve each deploy</option>
+              <option value="autonomous">Autonomous — agent decides &amp; self-heals</option>
+            </select>
+            <label>Env  (KEY=VAL, comma-separated)</label>
+            <input name="env" placeholder="LOG_LEVEL=info,REGION=us">
+            <label>Secrets  (KEY=VAL — redacted everywhere)</label>
+            <input name="secrets" placeholder="API_KEY=•••">
+            <button class="btn" type="submit">Deploy — watch me work</button>
+          </form>
+
+          <details class="tool">
+            <summary>Not containerized yet? Ask the agent</summary>
+            <div class="inner">
+              <input id="ob-desc" placeholder="describe your app (e.g. node express api on 3000)">
+              <button class="btn ghost" id="ob-btn" style="margin-top:8px">Generate setup prompt</button>
+              <div class="out mono" id="ob-out"></div>
+            </div>
+          </details>
+          <details class="tool">
+            <summary>Let the agent suggest config</summary>
+            <div class="inner">
+              <div class="inline"><input id="ca-name" placeholder="name"><input id="ca-image" placeholder="image"></div>
+              <button class="btn ghost" id="ca-btn" style="margin-top:8px">Suggest config</button>
+              <div class="out mono" id="ca-out"></div>
+            </div>
+          </details>
+          <details class="tool">
+            <summary>Roll back a release</summary>
+            <div class="inner">
+              <div class="inline"><input id="rb-rev" type="number" placeholder="revision #"><button class="btn danger" id="rb-btn" type="button" style="margin-top:0">Roll back</button></div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="card" id="mon-card" style="display:none">
+        <h2>💓 Live monitoring <button class="btn danger" id="btn-stop" style="width:auto;margin:0 0 0 auto;padding:4px 12px">Stop</button></h2>
+        <div class="body" style="padding:0">
+          <div id="mon-fail"></div>
+          <div id="mon-met"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- agent stage -->
+    <section class="card" style="display:flex;flex-direction:column">
+      <h2>⎈ Agent activity</h2>
+      <div class="body" style="padding-bottom:6px"><div class="rail" id="rail"></div></div>
+      <div id="feed">
+        <div class="empty" id="empty"><span class="big">⎈</span>Idle. Start a deployment and I'll walk you through every step — live.</div>
+      </div>
+    </section>
+  </main>
+
 <script>
-  function kv(s){ const o={}; (s||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(p=>{const i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);}); return o; }
-  let currentName = "";
-  let currentNamespace = "default";
-  const tokenEl = document.getElementById("token");
-  tokenEl.value = localStorage.getItem("helmsman_token") || "";
-  tokenEl.addEventListener("change", () => localStorage.setItem("helmsman_token", tokenEl.value));
-  function authHeaders(extra) {
-    const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
-    if (tokenEl.value) h["Authorization"] = "Bearer " + tokenEl.value;
-    return h;
+(function(){
+  "use strict";
+  var STAGES=["Detect","Generate","Validate","Approve","Scan","Deploy","Verify","Monitor"];
+  var STAGE_ICON={Detect:"🔎",Generate:"📐",Validate:"✅",Approve:"🙋",Scan:"🛡️",Deploy:"📦",Verify:"🩺",Monitor:"💓"};
+  var TYPE_ICON={stage_enter:"▸",stage_exit:"✓",info:"ℹ️",manifest:"📄",cost:"💰",scan:"🛡️",
+    approval_required:"🙋",rejected:"✋",command:"❯",rollout:"🚀",failure:"⚠️",error:"⛔",
+    endpoint:"🌐",health:"💓",explanation:"🧠",remediation:"↩️",escalation:"🆘"};
+  // friendly first-person status per stage entered
+  var SAY={Detect:"Inspecting your cluster's capabilities…",Generate:"Rendering your manifests with Helm…",
+    Validate:"Validating everything before I touch the cluster…",Approve:"Waiting for your go-ahead…",
+    Scan:"Scanning the image for vulnerabilities…",Deploy:"Applying to the cluster…",
+    Verify:"Watching the rollout and health checks…",Monitor:"Live — keeping an eye on it…"};
+
+  // ---- safe DOM helpers (event data NEVER touches innerHTML) ----
+  function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n;}
+  function $(id){return document.getElementById(id);}
+
+  var body=document.body, feed=$("feed"), empty=$("empty"), rail=$("rail");
+  var statusEl=$("status"), statusT=$("status-t");
+  var railSteps={};
+
+  // build pipeline rail
+  STAGES.forEach(function(s){
+    var step=el("div","step"); step.dataset.stage=s;
+    var node=el("div","node",STAGE_ICON[s]);
+    step.appendChild(node); step.appendChild(el("small",null,s));
+    rail.appendChild(step); railSteps[s]={step:step,node:node};
+  });
+  function setStep(stage,state){
+    var r=railSteps[stage]; if(!r)return;
+    r.step.classList.remove("active","done","failed");
+    if(state)r.step.classList.add(state);
+    r.node.textContent="";
+    if(state==="active"){r.node.appendChild(el("span","sp"));}
+    else if(state==="done"){r.node.textContent="✓";}
+    else if(state==="failed"){r.node.textContent="✕";}
+    else {r.node.textContent=STAGE_ICON[stage];}
   }
-  fetch("/kubeconfigs", { headers: authHeaders() }).then(r => r.ok ? r.json() : null).then(d => {
-    if (!d || !d.names) return;
-    document.getElementById("cluster-list").textContent = "";
-    d.names.forEach(n => {
-      const opt = document.createElement("option");
-      opt.value = n;
-      document.getElementById("cluster-list").appendChild(opt);
-    });
-  }).catch(() => {});
-  const log = document.getElementById("log");
-  const approveBar = document.getElementById("approve");
-  const es = new EventSource("/events");
-  es.onmessage = (m) => {
-    const e = JSON.parse(m.data);
-    const div = document.createElement("div");
-    div.className = "ev " + (e.type === "error" ? "error" : e.type === "endpoint" ? "endpoint" : e.type.startsWith("stage") ? "stage" : "");
-    const time = new Date(e.ts * 1000).toLocaleTimeString();
-    let extra = "";
-    if (e.type === "endpoint") extra = " → " + (e.data.port_forward || "");
-    if (e.type === "error" && e.data.issues) extra = " → " + e.data.issues.join("; ");
-    const t = document.createElement("span");
-    t.className = "t";
-    t.textContent = time;
-    div.appendChild(t);
-    div.appendChild(document.createTextNode(` [${e.stage}] ${e.message}${extra}`));
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
-    if (e.type === "approval_required") {
-      document.getElementById("approve-msg").textContent = e.message + " ";
-      approveBar.style.display = "block";
+  function markPriorDone(stage){ // entering a stage → all earlier ones are done
+    var i=STAGES.indexOf(stage);
+    for(var k=0;k<i;k++){var st=STAGES[k];if(!railSteps[st].step.classList.contains("failed"))setStep(st,"done");}
+  }
+  function setStatus(kind,text){statusEl.dataset.s=kind;statusT.textContent=text;
+    body.classList.toggle("working",kind==="working"||kind==="waiting");}
+
+  var lastMsg=null;
+  function bubble(type,stage,message){
+    if(empty)empty.style.display="none";
+    if(lastMsg)lastMsg.querySelector(".txt").classList.remove("cursor");
+    var m=el("div","msg k-"+type);
+    m.appendChild(el("div","av",TYPE_ICON[type]||"•"));
+    var mb=el("div","mb");
+    var meta=el("div","meta");
+    meta.appendChild(el("span","stg",stage||""));
+    meta.appendChild(document.createTextNode("  ·  "+new Date().toLocaleTimeString()));
+    mb.appendChild(meta);
+    var txt=el("div","txt cursor",message||"");
+    mb.appendChild(txt); m.appendChild(mb); feed.appendChild(m);
+    feed.scrollTop=feed.scrollHeight; lastMsg=m; return mb; // return body for cards
+  }
+  function card(parent){var c=el("div","rc");parent.appendChild(c);return c;}
+
+  // ---- result chips ----
+  function chip(id,val){var c=$("chip-"+id);$("chip-"+id+"-v").textContent=val;c.classList.add("on");}
+
+  // ---------- event handling ----------
+  var es=new EventSource("/events");
+  es.onmessage=function(m){
+    var e; try{e=JSON.parse(m.data);}catch(_){return;}
+    var t=e.type, stage=e.stage, d=e.data||{};
+
+    // rail + status
+    if(t==="stage_enter"){markPriorDone(stage);setStep(stage,"active");setStatus("working",SAY[stage]||("Working on "+stage+"…"));}
+    if(t==="stage_exit" && !railSteps[stage].step.classList.contains("failed"))setStep(stage,"done");
+    if(t==="error"){setStep(stage,"failed");setStatus("error","Hit a problem in "+stage+".");}
+    if(t==="approval_required")setStatus("waiting","I need your approval to proceed.");
+    if(t==="escalation")setStatus("error","This one needs a human.");
+
+    // don't spam the feed with stage_exit; everything else speaks
+    if(t==="stage_exit")return;
+
+    var mb=bubble(t,stage,e.message);
+
+    if(t==="manifest" && d.yaml){
+      var c=card(mb),det=el("details","yaml");
+      det.appendChild(el("summary",null,"View rendered manifests"));
+      var pre=el("pre",null,d.yaml); det.appendChild(pre); c.appendChild(det);
     }
-    if (e.type === "health") {
-      document.getElementById("monitor").style.display = "block";
-      const met = document.getElementById("metrics");
-      met.textContent = (e.data.metrics || []).map(m => `${m.pod}  cpu ${m.cpu}  mem ${m.memory}`).join("\n");
-      const fl = document.getElementById("failures");
-      fl.textContent = (e.data.failures || []).map(f => `⚠ ${f.type} on ${f.pod}`).join("\n");
+    if(t==="cost" && d.breakdown){
+      var c2=card(mb),hd=el("div","hd");
+      hd.appendChild(el("span",null,"Estimated monthly cost"));
+      hd.appendChild(el("span","badge money","$"+d.monthly_usd+"/mo")); c2.appendChild(hd);
+      var det2=el("div","met");
+      det2.appendChild(el("span",null,"compute breakdown"));
+      det2.appendChild(el("span","mono","cpu $"+d.breakdown.cpu_usd+"   mem $"+d.breakdown.mem_usd)); c2.appendChild(det2);
+      chip("cost","$"+d.monthly_usd+"/mo");
     }
-    if (e.type === "explanation") {
-      const div = document.createElement("div");
-      div.className = "ev endpoint";
-      div.textContent = `🧠 ${e.message}${e.data.recommended_action ? " — fix: " + e.data.recommended_action : ""}`;
-      log.appendChild(div);
+    if(t==="scan"){
+      var img=d.image||{}, c3=card(mb),hd3=el("div","hd");
+      hd3.appendChild(el("span",null,"Image scan"));
+      hd3.appendChild(el("span",null,img.available===false?"skipped":(img.ok?"clean":"findings")));
+      c3.appendChild(hd3);
+      (img.findings||[]).slice(0,8).forEach(function(f){
+        var row=el("div","find");
+        row.appendChild(el("span","sev "+(f.severity||"UNKNOWN"),f.severity||"?"));
+        row.appendChild(el("span","mono",f.id||""));
+        row.appendChild(el("span",null,f.pkg?("· "+f.pkg):"")); c3.appendChild(row);
+      });
+      var cfg=d.config||{};
+      if((cfg.findings||[]).length){var row2=el("div","find");
+        row2.appendChild(el("span",null,cfg.findings.length+" advisory misconfig note(s)"));c3.appendChild(row2);}
     }
-    if (e.type === "remediation" || e.type === "escalation") {
-      const div = document.createElement("div");
-      div.className = "ev " + (e.type === "escalation" ? "error" : "endpoint");
-      div.textContent = (e.type === "escalation" ? "⚠ " : "↩ ") + e.message;
-      log.appendChild(div);
+    if(t==="command"){
+      var c4=card(mb),cm=el("div","cmd");
+      cm.appendChild(el("span","mono","$ "+e.message)); c4.appendChild(cm);
     }
-    if (e.type === "scan") {
-      const line = document.createElement("div");
-      line.className = "ev endpoint";
-      const img = e.data.image || {};
-      line.textContent = `🔍 scan: ${e.message}` +
-        (img.findings && img.findings.length ? " — " +
-          img.findings.slice(0, 5).map(f => `${f.severity} ${f.id} (${f.pkg})`).join(", ") : "");
-      log.appendChild(line);
+    if(t==="rollout" && d.desired){
+      var c5=card(mb),b=el("div","bar"),i=el("i");
+      i.style.width=Math.round(100*(d.ready||0)/d.desired)+"%"; b.appendChild(i); c5.appendChild(b);
     }
-    if (e.type === "cost") {
-      const line = document.createElement("div");
-      line.className = "ev endpoint";
-      line.textContent = `💰 ${e.message} (cpu $${e.data.breakdown.cpu_usd} + mem $${e.data.breakdown.mem_usd})`;
-      log.appendChild(line);
+    if(t==="endpoint"){
+      var c6=card(mb);
+      var svc=el("div","cmd"); svc.appendChild(el("span","mono",d.service?(d.service+":"+d.port):e.message)); c6.appendChild(svc);
+      if(d.port_forward){
+        var pf=el("div","cmd"); pf.appendChild(el("span","mono","$ "+d.port_forward));
+        var cp=el("button","copy","copy"); cp.onclick=function(){navigator.clipboard&&navigator.clipboard.writeText(d.port_forward);cp.textContent="copied";};
+        pf.appendChild(cp); c6.appendChild(pf);
+      }
+      chip("ep",d.service||"live"); setStatus("live","You're live 🎉  — deployment healthy.");
+      setStep("Verify","done");
+    }
+    if(t==="explanation"){
+      var c7=card(mb),hd7=el("div","hd"); hd7.appendChild(el("span",null,"🧠 Agent diagnosis")); c7.appendChild(hd7);
+      if(d.recommended_action){var ra=el("div","met");ra.appendChild(el("span",null,"suggested fix"));ra.appendChild(el("span","mono",d.recommended_action));c7.appendChild(ra);}
+    }
+    if(t==="approval_required"){
+      currentName=d.name||currentName; currentNamespace=d.namespace||currentNamespace;
+      var ask=el("div","ask");
+      var yes=el("button","yes","✓ Approve"); var no=el("button","no","✕ Reject");
+      yes.onclick=function(){resolveApproval(true);ask.remove();};
+      no.onclick=function(){resolveApproval(false);ask.remove();};
+      ask.appendChild(yes); ask.appendChild(no); mb.appendChild(ask);
+    }
+    if(t==="health"){
+      $("mon-card").style.display="block";
+      var fails=d.failures||[], mets=d.metrics||[];
+      var mf=$("mon-fail"); mf.textContent="";
+      fails.forEach(function(f){var r=el("div","met");r.style.color="var(--red)";
+        r.appendChild(el("span",null,"⚠️ "+f.type));r.appendChild(el("span","mono",f.pod||""));mf.appendChild(r);});
+      var mm=$("mon-met"); mm.textContent="";
+      mets.forEach(function(x){var r=el("div","met");
+        r.appendChild(el("span",null,x.pod));r.appendChild(el("span","mono","cpu "+x.cpu+"  ·  mem "+x.memory));mm.appendChild(r);});
+      chip("health",fails.length?(fails.length+" issue"+(fails.length>1?"s":"")):(mets.length+" pod"+(mets.length!==1?"s":"")+" healthy"));
     }
   };
-  document.getElementById("btn-approve").onclick = () => fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,approved:true})}).then(()=>approveBar.style.display="none");
-  document.getElementById("btn-reject").onclick = () => fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,approved:false})}).then(()=>approveBar.style.display="none");
-  document.getElementById("btn-stop").onclick = () =>
-    fetch("/monitor/stop", {method:"POST", headers:authHeaders(),
-      body: JSON.stringify({name: currentName})});
-  document.getElementById("rb-btn").onclick = () => {
-    const rev = parseInt(document.getElementById("rb-rev").value, 10);
-    if (!Number.isInteger(rev) || rev <= 0) {
-      alert("Enter a valid revision number");
-      return;
-    }
-    fetch("/rollback", {method:"POST", headers:authHeaders(),
-      body: JSON.stringify({name: currentName, namespace: currentNamespace,
-                            revision: rev})});
+  es.onerror=function(){setStatus("idle","Reconnecting to the agent…");};
+
+  // ---------- actions ----------
+  var currentName="", currentNamespace="default";
+  var tokenEl=$("token");
+  tokenEl.value=localStorage.getItem("helmsman_token")||"";
+  tokenEl.addEventListener("change",function(){localStorage.setItem("helmsman_token",tokenEl.value);});
+  $("settings-btn").onclick=function(){var s=$("settings");s.style.display=s.style.display==="none"?"block":"none";};
+  function authHeaders(){var h={"Content-Type":"application/json"};if(tokenEl.value)h["Authorization"]="Bearer "+tokenEl.value;return h;}
+  function kv(s){var o={};(s||"").split(",").map(function(x){return x.trim();}).filter(Boolean).forEach(function(p){var i=p.indexOf("=");if(i>0)o[p.slice(0,i)]=p.slice(i+1);});return o;}
+
+  // populate cluster datalist
+  fetch("/kubeconfigs",{headers:authHeaders()}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d||!d.names)return; var dl=$("cluster-list"); dl.textContent="";
+    d.names.forEach(function(n){var o=document.createElement("option");o.value=n;dl.appendChild(o);});
+  }).catch(function(){});
+
+  function resolveApproval(ok){
+    fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,approved:ok})});
+    setStatus(ok?"working":"idle",ok?"Approved — proceeding.":"Rejected — standing down.");
+  }
+  $("btn-stop").onclick=function(){fetch("/monitor/stop",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName})});};
+  $("rb-btn").onclick=function(){
+    var rev=parseInt($("rb-rev").value,10);
+    if(!Number.isInteger(rev)||rev<=0){alert("Enter a valid revision number");return;}
+    fetch("/rollback",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:currentName,namespace:currentNamespace,revision:rev})});
   };
-  document.getElementById("ob-btn").onclick = async () => {
-    const r = await fetch("/onboard", {method:"POST",headers:authHeaders(),
-      body: JSON.stringify({app_description: document.getElementById("ob-desc").value})});
-    const d = await r.json();
-    document.getElementById("ob-out").textContent = d.containerization_prompt || JSON.stringify(d);
+  $("ob-btn").onclick=function(){
+    fetch("/onboard",{method:"POST",headers:authHeaders(),body:JSON.stringify({app_description:$("ob-desc").value})})
+    .then(function(r){return r.json();}).then(function(d){$("ob-out").textContent=d.containerization_prompt||JSON.stringify(d,null,2);});
   };
-  document.getElementById("ca-btn").onclick = async () => {
-    const r = await fetch("/advise-config", {method:"POST",headers:authHeaders(),
-      body: JSON.stringify({name: document.getElementById("ca-name").value, image: document.getElementById("ca-image").value})});
-    const d = await r.json();
-    document.getElementById("ca-out").textContent =
-      (d.summary ? d.summary + "\n" : "") + (d.suggestions||[]).map(s => `${s.field}: ${s.value} — ${s.reason}`).join("\n");
+  $("ca-btn").onclick=function(){
+    fetch("/advise-config",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:$("ca-name").value,image:$("ca-image").value})})
+    .then(function(r){return r.json();}).then(function(d){
+      $("ca-out").textContent=(d.summary?d.summary+"\n":"")+(d.suggestions||[]).map(function(s){return s.field+": "+s.value+" — "+s.reason;}).join("\n");});
   };
-  document.getElementById("f").onsubmit = async (ev) => {
+  $("f").onsubmit=function(ev){
     ev.preventDefault();
-    const fd = new FormData(ev.target);
-    currentName = fd.get("name");
-    currentNamespace = fd.get("namespace") || "default";
-    await fetch("/deploy", { method:"POST", headers:authHeaders(),
-      body: JSON.stringify({
-        name: fd.get("name"), image: fd.get("image"), namespace: fd.get("namespace"),
-        port: Number(fd.get("port")), replicas: Number(fd.get("replicas")),
-        mode: fd.get("mode"), env: kv(fd.get("env")), secrets: kv(fd.get("secrets")),
-        cluster: fd.get("cluster") || "",
-      })});
+    var fd=new FormData(ev.target);
+    currentName=fd.get("name"); currentNamespace=fd.get("namespace")||"default";
+    // reset stage for a fresh run
+    STAGES.forEach(function(s){setStep(s,null);});
+    setStatus("working","Starting — let me take it from here.");
+    fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
+      name:fd.get("name"),image:fd.get("image"),namespace:fd.get("namespace"),
+      port:Number(fd.get("port")),replicas:Number(fd.get("replicas")),
+      mode:fd.get("mode"),env:kv(fd.get("env")),secrets:kv(fd.get("secrets")),
+      cluster:fd.get("cluster")||""
+    })}).catch(function(){setStatus("error","Couldn't reach the backend.");});
   };
+})();
 </script>
 </body>
 </html>
