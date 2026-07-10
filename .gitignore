@@ -12,3 +12,8 @@ CLAUDE.md
 docs/
 scripts/dev.sh
 scripts/kind-up.sh
+
+# test artifacts
+.coverage
+backend/.coverage
+htmlcov/
