@@ -32,8 +32,8 @@ claude(final_prompt, output_schema=SCHEMA)   # structured output, validated
 
 - **Placeholders** use `{{double_braces}}`. Don't rename them without updating
   the agent code that fills them.
-- **Keep the safety rules in `_system.md`.** They are design invariants
-  (CLAUDE.md), not style — removing them breaks the platform's guarantees.
+- **Keep the safety rules in `_system.md`.** They are design invariants,
+  not style — removing them breaks the platform's guarantees.
 - **Keep the output schema at the bottom of each file.** The code validates
   against it; drifting from it will fail the call.
 - Plain language always — the end user may not know Kubernetes.
