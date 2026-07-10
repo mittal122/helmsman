@@ -13,8 +13,11 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
-from tools import rollback, cluster
+from tools import rollback, cluster, portforward
 from breakers import Breaker
+
+FORWARD_TTL_S = 30          # a forward not heartbeated within this is reaped
+FORWARD_REAP_INTERVAL_S = 10
 
 app = FastAPI(title="Helmsman")
 bus = EventBus()
@@ -199,6 +202,34 @@ async def workload_forward(ns: str, name: str):
 @app.post("/namespaces/{ns}/workloads/{name}/forward/stop", dependencies=_TG)
 async def workload_forward_stop(ns: str, name: str):
     return await _cluster(cluster.stop_forward, ns, name)
+
+class KeysRequest(BaseModel):
+    keys: list[str] = []
+
+@app.post("/forwards/heartbeat", dependencies=_TG)
+async def forwards_heartbeat(req: KeysRequest):
+    # UI keepalive: mark the forwards it still has open as in-use (reaper spares them)
+    for k in req.keys[:100]:
+        portforward.touch(k)
+    return {"ok": True, "active": portforward.active()}
+
+@app.post("/forwards/stop", dependencies=_TG)
+async def forwards_stop(req: KeysRequest):
+    # pagehide beacon: stop the forwards the closing window owned
+    for k in req.keys[:100]:
+        await asyncio.to_thread(portforward.stop, k)
+    return {"ok": True}
+
+@app.on_event("startup")
+async def _start_forward_reaper():
+    async def loop():
+        while True:
+            await asyncio.sleep(FORWARD_REAP_INTERVAL_S)
+            try:
+                await asyncio.to_thread(portforward.reap, FORWARD_TTL_S)
+            except Exception:
+                pass
+    asyncio.create_task(loop())
 
 @app.post("/namespaces/{ns}/workloads/{name}/scale", dependencies=_TG)
 async def workload_scale(ns: str, name: str, req: ScaleRequest):

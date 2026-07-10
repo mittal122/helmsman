@@ -322,6 +322,19 @@
   $("ns").onchange=function(){curName="";loadWorkloads();};
   $("refresh-ns").onclick=loadNamespaces;
   $("refresh-wl").onclick=loadWorkloads;
+
+  // keepalive: tell the server which forwards this window still has open; the server
+  // reaps any forward not heartbeated within its TTL, so closing the window auto-stops
+  // the port-forward (heartbeat = robust backstop; pagehide beacon = instant on close).
+  setInterval(function(){
+    var keys=Object.keys(forwards); if(!keys.length)return;
+    fetch("/forwards/heartbeat",{method:"POST",headers:headers(),body:JSON.stringify({keys:keys})}).catch(function(){});
+  },8000);
+  window.addEventListener("pagehide",function(){
+    var keys=Object.keys(forwards); if(!keys.length)return;
+    try{fetch("/forwards/stop",{method:"POST",headers:headers(),body:JSON.stringify({keys:keys}),keepalive:true});}catch(_){}
+  });
+
   loadNamespaces();
 })();
 </script>

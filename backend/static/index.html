@@ -381,7 +381,7 @@
     else if(t==="endpoint"){ setStage("Verify","done"); setStatus("live","live & healthy"); var d=ev.data||{};
       var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); u.textContent="";
       var lbl=ep.querySelector(".lbl"); if(lbl) lbl.textContent = d.url ? "Open your app" : "Access via port-forward";
-      if(d.url){ var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
+      if(d.url){ liveForwardKey=curName; var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
         u.appendChild(el("div","epnote","auto port-forward running — click to open in a new tab")); }
       else { u.appendChild(document.createTextNode(d.service?d.service+":"+d.port:ev.message)); }
       if(d.port_forward){ u.appendChild(el("div","epcmd","$ "+d.port_forward)); }
@@ -399,7 +399,7 @@
   })();
 
   // ---- actions ----
-  var curName="",curNs="default",mode="manual";
+  var curName="",curNs="default",mode="manual",liveForwardKey="";
   var tokenEl=$("token");tokenEl.value=localStorage.getItem("helmsman_token")||"";
   tokenEl.addEventListener("change",function(){localStorage.setItem("helmsman_token",tokenEl.value);});
   $("settings-btn").onclick=function(){var s=$("settings");s.style.display=s.style.display==="none"?"block":"none";};
@@ -421,8 +421,18 @@
     $("pods").textContent="";$("pods").appendChild(el("div","empty","waiting for pods"));
     $("res").textContent="";$("res").appendChild(el("div","empty","waiting for metrics"));
     $("ep").className="endpoint pending";$("ep-url").textContent="waiting…";
-    $("approve").classList.remove("on");
+    $("approve").classList.remove("on");liveForwardKey="";
   }
+  // keepalive: keep the deploy's auto port-forward alive while this window is open;
+  // the server reaps it after the TTL once heartbeats stop (window closed).
+  setInterval(function(){
+    if(!liveForwardKey)return;
+    fetch("/forwards/heartbeat",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:[liveForwardKey]})}).catch(function(){});
+  },8000);
+  window.addEventListener("pagehide",function(){
+    if(!liveForwardKey)return;
+    try{fetch("/forwards/stop",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:[liveForwardKey]}),keepalive:true});}catch(_){}
+  });
   $("deploy-btn").onclick=function(){
     curName=val("name");curNs=val("namespace")||"default";curReplicas=Number(val("replicas"))||1;
     $("m-name").textContent=curName;$("m-ns").textContent=curNs;$("m-img").textContent=val("image");

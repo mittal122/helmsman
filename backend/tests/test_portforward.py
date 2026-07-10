@@ -28,3 +28,20 @@ def test_start_restarts_existing(monkeypatch):
     assert portforward._procs["k"] is not first
     portforward.stop_all()
     assert portforward._procs == {}
+
+def test_reap_stops_only_stale_forwards(monkeypatch):
+    import time
+    monkeypatch.setattr(portforward, "_free_port", lambda: 53000)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **k: _FakeProc())
+    portforward.start("stale", "ns", "svc/a", 80)
+    portforward.start("fresh", "ns", "svc/b", 80)
+    portforward._seen["stale"] = time.monotonic() - 100     # not heartbeated in 100s
+    portforward.touch("fresh")                              # recently heartbeated
+    dead = portforward.reap(30)
+    assert dead == ["stale"]
+    assert not portforward.is_running("stale") and portforward.is_running("fresh")
+    portforward.stop_all()
+
+def test_touch_ignores_unknown_key():
+    portforward.touch("does-not-exist")                    # no-op, no error
+    assert "does-not-exist" not in portforward._seen
