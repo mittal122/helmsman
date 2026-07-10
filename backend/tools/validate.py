@@ -11,12 +11,15 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
         issues.append("schema: " + (kc.stdout + kc.stderr).strip())
 
     # ponytail: don't pin -n; target namespace may not exist yet (created at deploy via helm --create-namespace)
-    dr = subprocess.run(
-        ["kubectl", "apply", "--dry-run=server", "-f", "-"],
-        input=manifests, capture_output=True, text=True,
-    )
-    if dr.returncode != 0:
-        issues.append("dry-run: " + dr.stderr.strip())
+    try:
+        dr = subprocess.run(
+            ["kubectl", "apply", "--dry-run=server", "-f", "-", "--request-timeout=10s"],
+            input=manifests, capture_output=True, text=True, timeout=30,
+        )
+        if dr.returncode != 0:
+            issues.append("dry-run: " + dr.stderr.strip())
+    except subprocess.TimeoutExpired:
+        issues.append("dry-run: server dry-run timed out — cluster unreachable or slow")
 
     # kube-score gates on genuinely-bad config, but we ignore checks that are
     # deliberate decisions for this platform, not defects:

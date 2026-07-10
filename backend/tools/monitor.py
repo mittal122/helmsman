@@ -27,22 +27,28 @@ def _failures_from_pods(items: list) -> list[dict]:
     return out
 
 def detect_failures(name: str, namespace: str) -> list[dict]:
-    r = subprocess.run(
-        ["kubectl", "get", "pods", "-l", f"app.kubernetes.io/name={name}",
-         "-n", namespace, "-o", "json"],
-        capture_output=True, text=True,
-    )
+    try:
+        r = subprocess.run(
+            ["kubectl", "get", "pods", "-l", f"app.kubernetes.io/name={name}",
+             "-n", namespace, "-o", "json", "--request-timeout=8s"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if r.returncode != 0:
         return []
     items = json.loads(r.stdout).get("items", [])
     return _failures_from_pods(items)
 
 def get_metrics(name: str, namespace: str) -> list[dict]:
-    r = subprocess.run(
-        ["kubectl", "top", "pods", "-l", f"app.kubernetes.io/name={name}",
-         "-n", namespace, "--no-headers"],
-        capture_output=True, text=True,
-    )
+    try:
+        r = subprocess.run(
+            ["kubectl", "top", "pods", "-l", f"app.kubernetes.io/name={name}",
+             "-n", namespace, "--no-headers", "--request-timeout=8s"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if r.returncode != 0:
         return []
     rows: list[dict] = []

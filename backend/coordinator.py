@@ -90,6 +90,15 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Detect capabilities and disable what the cluster can't serve
         current = "Detect"
         await emit("stage_enter", "Detect", "Checking cluster capabilities")
+        # Preflight: fail fast + visibly if the cluster API is unreachable, instead of
+        # stalling on a downstream kubectl/helm call with no feedback.
+        reachable, detail = await asyncio.to_thread(deploy.cluster_reachable)
+        if not reachable:
+            target = ("cluster '" + cluster + "'") if cluster else "the local cluster"
+            await emit("error", "Detect",
+                       f"Can't reach {target}: {detail}. Check your kubeconfig/context and that the cluster is running.")
+            return
+        await emit("info", "Detect", f"Cluster reachable ({detail})")
         caps = await asyncio.to_thread(deploy.detect_capabilities)
         if cfg.get("ingress_host") and not caps["ingress_controller"]:
             await emit("info", "Detect",

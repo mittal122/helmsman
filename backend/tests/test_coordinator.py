@@ -8,6 +8,7 @@ import breakers as breakers_mod
 
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
     monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)
@@ -36,6 +37,7 @@ async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_validation_failure_stops_before_deploy(monkeypatch):
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "bad")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (False, ["schema: nope"]))
     installed = {"called": False}
@@ -56,6 +58,7 @@ async def test_validation_failure_stops_before_deploy(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rollout_timeout_emits_error(monkeypatch):
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "y")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
     monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: None)
@@ -80,6 +83,7 @@ async def test_rollout_timeout_emits_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_exception_surfaced_as_error(monkeypatch):
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))
     def _boom(cfg):
         raise RuntimeError("boom")
     monkeypatch.setattr(coordinator.manifests, "render", _boom)
@@ -98,7 +102,28 @@ async def test_exception_surfaced_as_error(monkeypatch):
     err = next(e for e in events if e.type == "error")
     assert err.stage == "Generate"
 
+@pytest.mark.asyncio
+async def test_unreachable_cluster_fails_fast_with_error(monkeypatch):
+    # preflight: an unreachable cluster must emit a clear error and never render/deploy
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable",
+                        lambda *a, **k: (False, "kubectl timed out"))
+    rendered = {"called": False}
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: rendered.__setitem__("called", True) or "y")
+    bus = EventBus()
+    q = bus.subscribe()
+    await coordinator.run({"name": "app", "image": "i:1", "namespace": "default",
+                           "port": 8080, "replicas": 2}, bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    assert rendered["called"] is False
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    err = next(e for e in events if e.type == "error")
+    assert err.stage == "Detect" and "reach" in err.message.lower()
+
 def _stub_tools(monkeypatch):
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "test"))
     monkeypatch.setattr(coordinator.manifests, "render", lambda cfg: "kind: Deployment")
     monkeypatch.setattr(coordinator.validate, "validate", lambda m, ns: (True, []))
     monkeypatch.setattr(coordinator.scan, "scan_image", lambda image, **k: {
@@ -437,6 +462,7 @@ def test_cluster_selection_sets_and_cleans_kubeconfig(monkeypatch, tmp_path):
     fake = str(tmp_path / "decrypted.kubeconfig")
     open(fake, "w").write("x")
     seen = {}
+    monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "test"))
     monkeypatch.setattr(kubeconfig_store, "decrypt_to_tempfile",
                         lambda name: (seen.__setitem__("name", name), fake)[1])
     # capture KUBECONFIG visible to a downstream tool call
