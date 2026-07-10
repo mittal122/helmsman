@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from events import Event, EventBus
 from tools import manifests, validate, deploy, monitor, rollback, scan, cost
 import remediation
@@ -23,7 +24,11 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
     variants = guardrails.secret_variants(cfg.get("secrets") or {})
     current = "Detect"
 
+    _ctx = {"cmd": ""}   # last command emitted — attached to errors for the extract report
+
     async def emit(type_, stage, message, data=None):
+        if type_ == "command":
+            _ctx["cmd"] = message
         ev = Event(type=type_, stage=stage,
                    message=guardrails.redact(message, variants),
                    data=guardrails.redact(data or {}, variants))
@@ -256,7 +261,14 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("stage_exit", "Monitor", "Monitoring stopped")
     except Exception as e:
         try:
-            await emit("error", current, f"Unexpected error: {e}")
+            # capture the RAW detail so the user can hand the AI building this project
+            # an exact root cause: the traceback (which platform file:line broke),
+            # the failing subprocess's stderr, and the command that was running.
+            tb = traceback.format_exc()
+            stderr = getattr(e, "stderr", "") or ""
+            await emit("error", current, f"Unexpected error: {e}",
+                       {"kind": "internal", "command": _ctx["cmd"],
+                        "stderr": stderr, "traceback": tb})
             await guide(current, [f"internal error: {e}"])
         except Exception:
             pass

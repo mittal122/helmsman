@@ -114,8 +114,11 @@
   .fixbox .fr{font-size:.8rem;margin-top:3px;color:var(--ink)} .fixbox .fr b{color:var(--faint);font-weight:600}
   .fixbtn{margin-top:8px;background:var(--accent);color:var(--ground);border:0;border-radius:7px;padding:6px 11px;font-weight:700;font-size:.76rem;cursor:pointer;font-family:var(--sans)}
   .fptog{margin-left:10px;font-size:.72rem;color:var(--accent);cursor:pointer}
-  .fppre{display:none;margin-top:7px;background:var(--ground);border:1px solid var(--border);border-radius:7px;padding:9px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;color:var(--muted)}
+  .fppre{display:none;margin-top:7px;background:var(--ground);border:1px solid var(--border);border-radius:7px;padding:9px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;color:var(--muted)}
   .fppre.on{display:block}
+  .errx{grid-column:2 / -1;margin:2px 0 6px;border:1px solid var(--crit);border-radius:9px;background:var(--crit-dim);padding:8px 11px;font-family:var(--sans)}
+  .errloc{font-family:var(--mono);font-size:.76rem;color:var(--crit);margin-bottom:7px} .errloc b{color:var(--faint);font-weight:600}
+  .errx .fixbtn{background:var(--crit);color:#fff}
 
   .side{display:flex;flex-direction:column;gap:14px}
   .file{display:flex;align-items:center;gap:10px;padding:8px 16px;font-family:var(--mono);font-size:.8rem;color:var(--muted)}
@@ -255,8 +258,38 @@
     else msg.textContent=ev.message||"";
     r.appendChild(msg);
     stream.appendChild(r);
+    if(ev.type==="error"||ev.type==="failure"||ev.type==="escalation") stream.appendChild(errExtract(ev));
     if(ev.type==="guidance") stream.appendChild(fixBox(ev.data||{}));
     stream.scrollTop=stream.scrollHeight; lastRow=r;
+  }
+  function parseLoc(tb){
+    if(!tb)return "";
+    var re=/File "([^"]+)", line (\d+), in (\S+)/g, m, last=null, own=null;
+    while((m=re.exec(tb))){ last=m; if(m[1].indexOf("site-packages")<0 && m[1].indexOf("/asyncio/")<0 && m[1].indexOf("python3")<0) own=m; }
+    var f=own||last; return f? (f[1].split("/").pop()+":"+f[2]+" in "+f[3]+"()") : "";
+  }
+  function buildReport(ev){
+    var d=ev.data||{}, L=[];
+    L.push("=== Helmsman error report ===");
+    L.push("Stage: "+(ev.stage||""));
+    L.push("App: "+$("m-name").textContent+"   image: "+$("m-img").textContent+"   namespace: "+$("m-ns").textContent);
+    if(d.command) L.push("Command running: "+d.command);
+    L.push("Message: "+(ev.message||""));
+    if(d.issues&&d.issues.length){ L.push(""); L.push("Checker output:"); d.issues.forEach(function(i){L.push("  "+i);}); }
+    if(d.failures&&d.failures.length){ L.push(""); L.push("Pod failures:"); d.failures.forEach(function(f){L.push("  "+f.type+" on "+f.pod+": "+(f.message||""));}); }
+    if(d.message) { L.push(""); L.push("Detail: "+d.message); }
+    if(d.stderr){ L.push(""); L.push("--- subprocess stderr ---"); L.push(d.stderr); }
+    if(d.traceback){ L.push(""); L.push("--- traceback (where the platform code broke) ---"); L.push(d.traceback); }
+    var loc=parseLoc(d.traceback); if(loc){ L.push(""); L.push("Occurred at: "+loc); }
+    return L.join("\n");
+  }
+  function errExtract(ev){
+    var report=buildReport(ev), box=el("div","errx"), loc=parseLoc((ev.data||{}).traceback);
+    if(loc){ var l=el("div","errloc"); l.appendChild(el("b",null,"↳ occurred at ")); l.appendChild(document.createTextNode(loc)); box.appendChild(l); }
+    var btn=el("button","fixbtn","⧉ Copy error report for the AI"), tog=el("span","fptog","view raw"), pre=el("pre","fppre",report);
+    btn.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(report);btn.textContent="✓ Copied — paste to the AI";setTimeout(function(){btn.textContent="⧉ Copy error report for the AI";},2500);};
+    tog.onclick=function(){pre.classList.toggle("on");tog.textContent=pre.classList.contains("on")?"hide raw":"view raw";};
+    var line=el("div"); line.appendChild(btn); line.appendChild(tog); box.appendChild(line); box.appendChild(pre); return box;
   }
   function fixBox(g){
     var b=el("div","fixbox");

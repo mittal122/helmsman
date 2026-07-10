@@ -125,6 +125,11 @@ async def test_exception_surfaced_as_error(monkeypatch):
     assert "error" in types
     err = next(e for e in events if e.type == "error")
     assert err.stage == "Generate"
+    # raw detail for the "extract error report" feature: traceback (where the platform
+    # code broke) + the command that was running when it failed
+    assert err.data.get("kind") == "internal"
+    assert "coordinator.py" in err.data["traceback"] and "boom" in err.data["traceback"]
+    assert "helm template" in err.data["command"]
 
 @pytest.mark.asyncio
 async def test_unreachable_cluster_fails_fast_with_error(monkeypatch):
