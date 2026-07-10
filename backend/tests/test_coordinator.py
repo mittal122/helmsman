@@ -568,6 +568,59 @@ async def test_unknown_cluster_emits_error_not_raise(monkeypatch):
     assert "error" in types
 
 @pytest.mark.asyncio
+async def test_git_repo_triggers_build_and_flows_tag_into_pipeline(monkeypatch):
+    # deploy-from-source: clone + build + load, then the built tag flows into render/deploy
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: ("/tmp/wd", "abc1234"))
+    monkeypatch.setattr(coordinator.builder, "image_tag", lambda name, sha: f"{name}:src-{sha}")
+    monkeypatch.setattr(coordinator.builder, "build", lambda wd, tag, df: None)
+    monkeypatch.setattr(coordinator.builder, "current_context", lambda: "kind-helmsman")
+    monkeypatch.setattr(coordinator.builder, "make_available", lambda tag, ctx: "kind")
+    cleaned = {}
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: cleaned.__setitem__("wd", wd))
+    rendered = {}
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: rendered.__setitem__("image", cfg.get("image")) or "kind: Deployment")
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git",
+                               git_branch="main", dockerfile="Dockerfile"),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    pairs = [(e.type, e.stage) for e in events]
+    assert ("stage_enter", "Build") in pairs and ("stage_exit", "Build") in pairs
+    assert rendered["image"] == "app:src-abc1234"   # built tag drives the deploy
+    assert cleaned["wd"] == "/tmp/wd"               # temp clone cleaned up
+    assert "endpoint" in [e.type for e in events]
+
+@pytest.mark.asyncio
+async def test_build_failure_stops_before_deploy_with_guidance(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.builder, "clone", lambda *a: ("/tmp/wd", "sha"))
+    monkeypatch.setattr(coordinator.builder, "build",
+                        lambda *a: (_ for _ in ()).throw(RuntimeError("Dockerfile not found in repo: Dockerfile")))
+    cleaned = {}
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: cleaned.__setitem__("wd", wd))
+    installed = {"c": False}
+    monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: installed.__setitem__("c", True))
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git"),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    types = [e.type for e in events]
+    assert installed["c"] is False              # build failed -> never deployed
+    assert "error" in types and "guidance" in types
+    assert next(e for e in events if e.type == "error").stage == "Build"
+    g = next(e for e in events if e.type == "guidance")
+    assert g.data["items"][0]["problem"] == "The repo has no Dockerfile at that path"
+    assert cleaned["wd"] == "/tmp/wd"           # cleanup ran even on failure
+
+@pytest.mark.asyncio
 async def test_transient_crash_recovers_no_blocking_guidance(monkeypatch):
     # a pod crash-loops during startup then recovers -> WARN only + "recovered" note +
     # a genuinely-live endpoint with a clickable URL, and NO blocking guidance.

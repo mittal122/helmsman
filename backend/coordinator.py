@@ -2,7 +2,7 @@ import asyncio
 import os
 import traceback
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback, scan, cost, portforward
+from tools import manifests, validate, deploy, monitor, rollback, scan, cost, portforward, builder
 import remediation
 import diagnostics
 import kubeconfig_store
@@ -143,6 +143,36 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("info", "Detect", "No metrics-server — skipping HPA")
             cfg["hpa_enabled"] = False
         await emit("stage_exit", "Detect", "Capabilities resolved")
+
+        # Build (deploy-from-source) — clone the repo, build its Dockerfile, and make the
+        # image available to the cluster. Skipped entirely when a pre-built image is given.
+        if cfg.get("git_repo"):
+            current = "Build"
+            workdir = None
+            await emit("stage_enter", "Build", "Building image from source")
+            try:
+                repo, branch = cfg["git_repo"], cfg.get("git_branch", "")
+                ref, dockerfile = cfg.get("git_ref", ""), cfg.get("dockerfile") or "Dockerfile"
+                safe = builder.display_url(repo)
+                await emit("command", "Build",
+                           f"git clone --depth 1 {('-b ' + branch + ' ') if branch else ''}{safe}")
+                workdir, sha = await asyncio.to_thread(builder.clone, repo, branch, ref)
+                tag = builder.image_tag(name, sha)
+                await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} .")
+                await asyncio.to_thread(builder.build, workdir, tag, dockerfile)
+                ctx = await asyncio.to_thread(builder.current_context)
+                await emit("command", "Build", f"# load {tag} into cluster (context {ctx})")
+                method = await asyncio.to_thread(builder.make_available, tag, ctx)
+                cfg["image"] = tag
+                await emit("info", "Build", f"Built {tag} from {safe}@{sha} → available via {method}")
+                await emit("stage_exit", "Build", "Image built")
+            except Exception as e:
+                await emit("error", "Build", f"Build failed: {e}")
+                await guide("Build", [f"source build failed: {e}"])
+                return
+            finally:
+                if workdir:
+                    await asyncio.to_thread(builder.cleanup, workdir)
 
         # Generate
         current = "Generate"

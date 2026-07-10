@@ -176,13 +176,18 @@
       <div id="settings" style="display:none;margin-bottom:6px"><label>Operator token (optional)</label><input id="token" type="password" placeholder="Bearer token"></div>
       <div class="frow">
         <div><label>App name</label><input name="name" value="demo"></div>
-        <div><label>Image</label><input name="image" value="mendhak/http-https-echo:31"></div>
+        <div><label>Image <span style="color:var(--faint);font-weight:400">(or build from Git ↓)</span></label><input name="image" value="mendhak/http-https-echo:31"></div>
         <div><label>Namespace</label><input name="namespace" value="default"></div>
         <div><label>Cluster</label><input name="cluster" list="cl" placeholder="local kind"><datalist id="cl"></datalist></div>
         <div><label>Port</label><input name="port" value="8080" type="number"></div>
         <div><label>Replicas</label><input name="replicas" value="2" type="number"></div>
         <div><label>Env (K=V,…)</label><input name="env" placeholder="LOG_LEVEL=info"></div>
         <div><label>Secrets (K=V, redacted)</label><input name="secrets" placeholder="API_KEY=•••"></div>
+      </div>
+      <div class="frow">
+        <div style="flex:2"><label>Git repo <span style="color:var(--faint);font-weight:400">(build from source — leave Image blank)</span></label><input name="git_repo" placeholder="https://github.com/org/app.git"></div>
+        <div><label>Branch</label><input name="git_branch" placeholder="main"></div>
+        <div><label>Dockerfile</label><input name="dockerfile" placeholder="Dockerfile"></div>
       </div>
       <div class="fbtns">
         <button class="btn primary" id="deploy-btn">Deploy — show everything</button>
@@ -236,7 +241,7 @@
   var $=function(id){return document.getElementById(id);};
   var el=function(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
 
-  var STAGES=["Detect","Generate","Validate","Approve","Scan","Deploy","Verify","Monitor","Remediate"];
+  var STAGES=["Detect","Build","Generate","Validate","Approve","Scan","Deploy","Verify","Monitor","Remediate"];
   var stg={};
   (function(){var host=$("stages");STAGES.forEach(function(s,i){
     var d=el("div","stg");var b=el("div","bul",String(i+1));d.appendChild(b);d.appendChild(el("div","lb",s));
@@ -334,7 +339,7 @@
   function setStatus(s,t){$("status").dataset.s=s;$("status-t").textContent=t;}
   function nowBanner(title,sub,bar){var n=$("now");n.style.display="flex";$("now-title").textContent=title;$("now-sub").textContent=sub?" — "+sub:"";$("now-bar").textContent=bar||"";}
 
-  var SAY={Detect:"checking the cluster",Generate:"rendering manifests",Validate:"validating",Approve:"awaiting approval",
+  var SAY={Detect:"checking the cluster",Build:"building image from source",Generate:"rendering manifests",Validate:"validating",Approve:"awaiting approval",
     Scan:"scanning image",Deploy:"applying to cluster",Verify:"watching rollout",Monitor:"monitoring",Remediate:"auto-recovering"};
 
   // side panels
@@ -455,7 +460,8 @@
     $("formwrap").open=false;
     fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
       name:val("name"),image:val("image"),namespace:val("namespace"),port:Number(val("port")),
-      replicas:Number(val("replicas")),mode:mode,env:kv(val("env")),secrets:kv(val("secrets")),cluster:val("cluster")||""
+      replicas:Number(val("replicas")),mode:mode,env:kv(val("env")),secrets:kv(val("secrets")),cluster:val("cluster")||"",
+      git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||"Dockerfile"
     })}).catch(function(){setStatus("error","couldn't reach backend");});
   };
   function resolveApproval(ok){$("approve").classList.remove("on");

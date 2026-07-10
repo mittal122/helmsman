@@ -5,7 +5,7 @@ import re
 import subprocess
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, field_validator, model_validator, Field
 import auth
 import kubeconfig_store
 from events import Event, EventBus
@@ -13,7 +13,7 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
-from tools import rollback, cluster, portforward
+from tools import rollback, cluster, portforward, builder
 from breakers import Breaker
 import logging
 import store
@@ -72,7 +72,7 @@ def _dns1123(v: str) -> str:
 
 class DeployRequest(BaseModel):
     name: str
-    image: str
+    image: str = ""        # pre-built image; OR build from git_repo below
     namespace: str = "default"
     port: int = 8080
     replicas: int = 2
@@ -85,6 +85,10 @@ class DeployRequest(BaseModel):
     hpa_max: int = 5
     hpa_cpu: int = 80
     cluster: str = ""      # named kubeconfig from the store; "" = ambient (kind)
+    git_repo: str = ""     # deploy-from-source: clone + build this repo's Dockerfile
+    git_branch: str = ""
+    git_ref: str = ""      # commit sha / tag (optional)
+    dockerfile: str = "Dockerfile"
 
     @field_validator("name", "namespace")
     @classmethod
@@ -96,6 +100,19 @@ class DeployRequest(BaseModel):
         if v.startswith("-") or any(c.isspace() for c in v):
             raise ValueError("invalid image reference")
         return v
+
+    @field_validator("git_repo")
+    @classmethod
+    def _valid_repo(cls, v):
+        if v and not builder.valid_url(v):
+            raise ValueError("invalid git repo URL (must be https://… or git@…)")
+        return v
+
+    @model_validator(mode="after")
+    def _image_or_repo(self):
+        if not self.image and not self.git_repo:
+            raise ValueError("provide either 'image' or 'git_repo'")
+        return self
 
 class ApproveRequest(BaseModel):
     name: str
@@ -141,8 +158,9 @@ async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+    src = f"git={builder.display_url(req.git_repo)}" if req.git_repo else f"image={req.image}"
     await store.append_audit(auth.actor(), "deploy", f"{req.namespace}/{req.name}", True,
-                             f"image={req.image} mode={req.mode}")
+                             f"{src} mode={req.mode}")
     return {"deployment_id": req.name}
 
 @app.post("/rollback", dependencies=[Depends(auth.require_token)])

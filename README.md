@@ -40,13 +40,17 @@ connection. Everything after that is instant. On Linux it may ask for your passw
 ## Deploy your app
 
 1. Open **http://localhost:8000**.
-2. In **Deploy**, enter your container image (e.g. `yourname/your-app:1.0`), a name, port,
-   and replicas → hit **Deploy**. Watch every step live.
+2. In **Deploy**, either enter a **container image** (e.g. `yourname/your-app:1.0`) **or a
+   Git repo URL** to build from source — plus a name, port, and replicas → hit **Deploy**.
+   Watch every step live.
 3. Use **Manage** to scale, view logs, autoscale, open the app's URL, or delete — for any
    app in any namespace.
 
-> Helmsman deploys a **pre-built container image**. Don't have one yet? Use the
-> **"Ask agent: containerize"** button to generate a Dockerfile from a description.
+> **Deploy from source:** put your repo's URL in the **Git repo** field (leave Image blank).
+> Helmsman clones it, builds its `Dockerfile`, loads the image straight into your local
+> cluster (kind/minikube — no registry needed), and deploys it. For a remote cluster, set
+> `REGISTRY` to a registry it can pull from. Needs Docker on the machine running Helmsman.
+> No Dockerfile yet? Use **"Ask agent: containerize"** to generate one from a description.
 
 ## Configuration (optional)
 
@@ -58,12 +62,16 @@ All via environment variables — the defaults work for local use:
 | `DATABASE_URL` | Postgres for durable deploy history + audit log. Unset = in-memory. |
 | `KUBECONFIG` | Which cluster to manage. The setup script points at the local one it created. |
 | `KUBECONFIG_ENC_KEY` | Enables the encrypted multi-cluster kubeconfig store. |
+| `REGISTRY` | Push target for **deploy-from-Git** builds when the cluster is remote (kind/minikube need none). |
 
 ## Features
 
-- **Deploy console** — live stream of the real `helm`/`kubectl` commands + raw errors
-  (with a copy-able report incl. the exact `file:line`), a 9-stage progress bar, generated
-  files, pod health, CPU/mem, and a **clickable auto-port-forward URL**.
+- **Deploy from image or Git** — deploy a pre-built image, or point at a **Git repo** and
+  Helmsman clones it, builds the `Dockerfile`, and loads the image into your local cluster
+  (no registry needed) — then deploys through the same validated pipeline.
+- **Deploy console** — live stream of the real `git`/`docker`/`helm`/`kubectl` commands +
+  raw errors (with a copy-able report incl. the exact `file:line`), a staged progress bar,
+  generated files, pod health, CPU/mem, and a **clickable auto-port-forward URL**.
 - **SRE management console** — browse any namespace → any workload: topology summary
   (**Service → Deployment → Pods** + HPA/PDB/Config) + scale/stop/restart/autoscale/logs/
   delete (2-step)/**▶ Open app**.
@@ -77,7 +85,7 @@ All via environment variables — the defaults work for local use:
 ## Development
 
 ```bash
-cd backend && python -m pytest -q      # 136 tests
+cd backend && python -m pytest -q      # 152 tests
 ```
 
 ## Advanced — other ways to run (only if you already know Docker)

@@ -22,6 +22,22 @@ def _checker(issue: str) -> str:
 
 # ordered (predicate, builder) rules; first match wins per issue.
 _RULES = [
+    (lambda s: "dockerfile not found" in s,
+     lambda: ("The repo has no Dockerfile at that path",
+              "Deploy-from-source builds the Dockerfile in your repo, but none was found at the given path.",
+              "Add a Dockerfile at the repo root, or set the correct path in the Dockerfile field (e.g. `docker/Dockerfile`).")),
+    (lambda s: "docker daemon" in s or "cannot connect to the docker daemon" in s,
+     lambda: ("No running Docker daemon on the build host",
+              "Building from source needs Docker on the machine running Helmsman.",
+              "Start Docker (`sudo systemctl start docker`, or Docker Desktop), then deploy again — or deploy a pre-built image instead of a git repo.")),
+    (lambda s: "repository not found" in s or "could not read from remote" in s or "authentication failed" in s or ("clone" in s and "fail" in s),
+     lambda: ("The git repo couldn't be cloned",
+              "The URL/branch is wrong or unreachable, or the repo is private and needs credentials.",
+              "Check the repo URL and branch. For a private repo use an https URL with a token: `https://<token>@host/org/repo.git`.")),
+    (lambda s: "isn't local" in s or "set registry" in s,
+     lambda: ("A source build can't reach a remote cluster without a registry",
+              "For kind/minikube the built image is loaded straight into the cluster; a remote cluster must pull it from a registry.",
+              "Set the REGISTRY env var to a registry you can push to, or deploy the source to a local kind/minikube cluster.")),
     (lambda s: "latest tag" in s or "image with latest" in s or "pinned" in s and "tag" in s,
      lambda: ("Your image has no pinned version tag",
               "Kubernetes treats an untagged image as ':latest'. That isn't reproducible and breaks rollbacks, so it's blocked as a CRITICAL policy violation.",

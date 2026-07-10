@@ -44,6 +44,23 @@ def test_deploy_accepts_config_and_returns_id(monkeypatch):
     assert r.status_code == 200
     assert "deployment_id" in r.json()
 
+def test_deploy_from_git_repo_accepted_without_image(monkeypatch):
+    async def fake_run(cfg, bus, approvals, monitors, breakers):
+        return None
+    monkeypatch.setattr(main, "coordinator_run", fake_run)
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app", "git_repo": "https://github.com/org/app.git"})
+    assert r.status_code == 200
+
+def test_deploy_requires_image_or_git_repo():
+    client = TestClient(main.app)
+    assert client.post("/deploy", json={"name": "app"}).status_code == 422
+
+def test_deploy_rejects_bad_git_url():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app", "git_repo": "ftp://x/y; rm -rf /"})
+    assert r.status_code == 422
+
 def test_root_serves_ui():
     client = TestClient(main.app)
     r = client.get("/")
