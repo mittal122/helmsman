@@ -192,6 +192,14 @@ async def workload_summary(ns: str, name: str):
 async def workload_logs(ns: str, name: str, tail: int = 200):
     return {"logs": await _cluster(cluster.get_logs, ns, name, min(max(tail, 1), 2000))}
 
+@app.post("/namespaces/{ns}/workloads/{name}/forward", dependencies=_TG)
+async def workload_forward(ns: str, name: str):
+    return await _cluster(cluster.forward, ns, name)
+
+@app.post("/namespaces/{ns}/workloads/{name}/forward/stop", dependencies=_TG)
+async def workload_forward_stop(ns: str, name: str):
+    return await _cluster(cluster.stop_forward, ns, name)
+
 @app.post("/namespaces/{ns}/workloads/{name}/scale", dependencies=_TG)
 async def workload_scale(ns: str, name: str, req: ScaleRequest):
     return await _cluster(cluster.scale, ns, name, req.replicas)

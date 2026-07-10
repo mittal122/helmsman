@@ -77,6 +77,42 @@ def test_autoscale_validates(monkeypatch):
     with pytest.raises(ValueError):
         cluster.set_autoscale("prod", "api", 6, 2, 70)   # min>max
 
+def test_forward_resolves_service_and_port(monkeypatch):
+    # foreign app: deployment 'go-web-app-deployment' -> service 'go-web-app-service' :80
+    dep = {"spec": {"selector": {"matchLabels": {"app": "go-web-app"}},
+                    "template": {"metadata": {"labels": {"app": "go-web-app"}},
+                                 "spec": {"containers": [{"ports": [{"containerPort": 8080}]}]}}}}
+    svcs = {"items": [{"metadata": {"name": "go-web-app-service"},
+                       "spec": {"selector": {"app": "go-web-app"}, "ports": [{"port": 80, "targetPort": 8080}]}}]}
+    def fake(cmd, **k):
+        a = " ".join(cmd)
+        if "get deploy" in a: return _run(stdout=json.dumps(dep))
+        if "get svc" in a: return _run(stdout=json.dumps(svcs))
+        return _run(stdout="{}")
+    monkeypatch.setattr(subprocess, "run", fake)
+    started = {}
+    monkeypatch.setattr(cluster.portforward, "start",
+                        lambda key, ns, target, port: started.update(key=key, target=target, port=port) or 55123)
+    r = cluster.forward("default", "go-web-app-deployment")
+    assert r["url"] == "http://127.0.0.1:55123"
+    assert started == {"key": "default/go-web-app-deployment", "target": "svc/go-web-app-service", "port": 80}
+
+def test_forward_falls_back_to_deploy_container_port(monkeypatch):
+    dep = {"spec": {"selector": {"matchLabels": {"app": "x"}},
+                    "template": {"metadata": {"labels": {"app": "x"}},
+                                 "spec": {"containers": [{"ports": [{"containerPort": 9000}]}]}}}}
+    def fake(cmd, **k):
+        a = " ".join(cmd)
+        if "get deploy" in a: return _run(stdout=json.dumps(dep))
+        if "get svc" in a: return _run(stdout=json.dumps({"items": []}))   # no service
+        return _run(stdout="{}")
+    monkeypatch.setattr(subprocess, "run", fake)
+    started = {}
+    monkeypatch.setattr(cluster.portforward, "start",
+                        lambda key, ns, target, port: started.update(target=target, port=port) or 5)
+    cluster.forward("ns", "x")
+    assert started == {"target": "deploy/x", "port": 9000}
+
 def test_delete_uses_helm_when_release_exists(monkeypatch):
     calls = []
     def fake(cmd, **k):

@@ -245,7 +245,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # all desired replicas ready -> genuinely live
         ep = await asyncio.to_thread(deploy.get_endpoint, name, ns, port)
         try:
-            lport = await asyncio.to_thread(portforward.start, name, ns, port)
+            lport = await asyncio.to_thread(portforward.start, name, ns, f"svc/{name}", port)
             ep["url"] = f"http://127.0.0.1:{lport}"
         except Exception:
             pass  # port-forward is best-effort; the service/port-forward cmd still shown

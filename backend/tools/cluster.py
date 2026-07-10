@@ -9,6 +9,7 @@ an unreachable cluster fails fast instead of hanging.
 import json
 import re
 import subprocess
+from tools import portforward
 
 TIMEOUT_S = 20
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")   # RFC1123 (ns/workload)
@@ -172,6 +173,44 @@ def get_summary(namespace: str, name: str) -> dict:
         "configMaps": sorted(x for x in refs["configMaps"] if x),
         "secrets": sorted(x for x in refs["secrets"] if x),
     }
+
+def forward(namespace: str, name: str) -> dict:
+    """Start a port-forward so the workload has a clickable URL. Resolves the Service
+    routing to the deployment (a ClusterIP isn't reachable from the browser); falls
+    back to the deployment's containerPort if no Service exists."""
+    _valid(namespace, name)
+    dep = _json("get", "deploy", name, "-n", namespace)
+    spec = dep.get("spec", {})
+    tmpl = spec.get("template", {}).get("metadata", {}).get("labels", {}) or {}
+    sel = spec.get("selector", {}).get("matchLabels", {}) or {}
+    target, port = None, None
+    try:
+        for s in _json("get", "svc", "-n", namespace).get("items", []):
+            ssel = s.get("spec", {}).get("selector") or {}
+            ports = s.get("spec", {}).get("ports") or []
+            if ports and (_subset(ssel, tmpl) or _subset(ssel, sel)):
+                target, port = f"svc/{s.get('metadata', {}).get('name')}", int(ports[0]["port"])
+                break
+    except RuntimeError:
+        pass
+    if not target:
+        for c in spec.get("template", {}).get("spec", {}).get("containers", []):
+            for p in c.get("ports", []) or []:
+                if p.get("containerPort"):
+                    target, port = f"deploy/{name}", int(p["containerPort"])
+                    break
+            if target:
+                break
+    if not target:
+        raise RuntimeError("no Service or containerPort found to forward to")
+    lport = portforward.start(f"{namespace}/{name}", namespace, target, port)
+    return {"ok": True, "url": f"http://127.0.0.1:{lport}",
+            "local_port": lport, "target": target, "port": port}
+
+def stop_forward(namespace: str, name: str) -> dict:
+    _valid(namespace, name)
+    portforward.stop(f"{namespace}/{name}")
+    return {"ok": True}
 
 def get_logs(namespace: str, name: str, tail: int = 200) -> str:
     _valid(namespace, name)

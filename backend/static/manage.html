@@ -72,6 +72,10 @@
   .chipset{display:flex;flex-wrap:wrap;gap:6px}
   .chip{font-family:var(--mono);font-size:.72rem;border:1px solid var(--border);border-radius:7px;padding:5px 9px;background:var(--panel-2);color:var(--muted)}
   .hpa{border:1px solid var(--accent);border-radius:9px;padding:10px 12px;background:var(--accent-dim);font-family:var(--mono);font-size:.78rem;color:var(--ink)}
+  .urlbox{margin:-6px 0 14px;font-family:var(--mono);font-size:.82rem}
+  .urlbox .urllbl{color:var(--good);font-weight:700}
+  .urlbox a{color:var(--accent);font-weight:700;text-decoration:none}.urlbox a:hover{text-decoration:underline}
+  .urlbox .urlnote{color:var(--faint);font-size:.72rem}
   pre.logs{background:var(--ground);border:1px solid var(--border);border-radius:9px;padding:10px;font-family:var(--mono);font-size:11.5px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:10px 16px;font-size:.85rem;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none;z-index:50}
   .toast.on{display:block} .toast.err{border-color:var(--crit);color:var(--crit)}
@@ -199,6 +203,7 @@
 
     // actions
     var a=el("div","actions");
+    var openb=el("button","btn primary","▶ Open app");openb.onclick=doForward;a.appendChild(openb);
     var scaleWrap=el("span","mini");scaleWrap.appendChild(el("label",null,"scale"));
     var scaleIn=el("input");scaleIn.type="number";scaleIn.value=s.desired;scaleIn.min=0;scaleWrap.appendChild(scaleIn);
     var scaleBtn=el("button","btn","Apply");scaleBtn.onclick=function(){act("scale",{replicas:parseInt(scaleIn.value,10)});};scaleWrap.appendChild(scaleBtn);
@@ -208,6 +213,7 @@
     var del=el("button","btn danger","🗑 Delete");del.onclick=openDelete;a.appendChild(del);
     var logsBtn=el("button","btn","View logs");logsBtn.onclick=loadLogs;a.appendChild(logsBtn);
     d.appendChild(a);
+    var ub=el("div","urlbox");ub.id="urlbox";d.appendChild(ub);renderUrlBox();
 
     // autoscale controls
     var asSec=el("div","sec");asSec.appendChild(el("h3",null,"Autoscaling (HPA)"));
@@ -265,6 +271,27 @@
   function rel(txt){return el("div","rel",txt);}
   function table(cols,rows){var t=el("table");var h=el("tr");cols.forEach(function(c){h.appendChild(el("th",null,c));});t.appendChild(h);
     rows.forEach(function(r){var tr=el("tr");r.forEach(function(v){tr.appendChild(el("td",null,String(v)));});t.appendChild(tr);});return t;}
+
+  var forwards={};   // "ns/name" -> {url,target,port} — persists across auto-refresh
+  function renderUrlBox(){
+    var ub=$("urlbox");if(!ub)return;ub.textContent="";
+    var f=forwards[curNs+"/"+curName];if(!f)return;
+    ub.appendChild(el("span","urllbl","▶ Running: "));
+    var link=el("a",null,f.url);link.href=f.url;link.target="_blank";link.rel="noopener";ub.appendChild(link);
+    ub.appendChild(el("span","urlnote","  ("+f.target+" → :"+f.port+", click to open in a new tab)"));
+    var s=el("button","btn","Stop forwarding");s.style.marginLeft="10px";s.onclick=stopForward;ub.appendChild(s);
+  }
+  async function doForward(){
+    var ub=$("urlbox");if(ub){ub.textContent="";ub.appendChild(el("span","urlnote","starting port-forward… (a ClusterIP isn't reachable directly)"));}
+    try{var r=await api("POST","/namespaces/"+curNs+"/workloads/"+curName+"/forward");
+      forwards[curNs+"/"+curName]=r;renderUrlBox();toast("port-forward started");}
+    catch(e){renderUrlBox();toast("open: "+e.message,true);}
+  }
+  async function stopForward(){
+    try{await api("POST","/namespaces/"+curNs+"/workloads/"+curName+"/forward/stop");}
+    catch(e){toast(e.message,true);}
+    delete forwards[curNs+"/"+curName];renderUrlBox();toast("port-forward stopped");
+  }
 
   async function act(action,body){
     try{await api("POST","/namespaces/"+curNs+"/workloads/"+curName+"/"+action,body);toast(action.split("/")[0]+" ✓");await refreshDetail();await loadWorkloads();}
