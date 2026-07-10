@@ -12,7 +12,7 @@ monitor → remediate — with **every action visible in real time (never a blac
 
 ## The one document that has everything
 
-**`docs/superpowers/specs/2026-07-09-ai-kubernetes-deployment-platform-design.md`**
+**`docs/DESIGN.md`**
 — the complete design (15 sections). It is the source of truth. When in doubt,
 read it. Do not contradict it without the user's explicit approval; if you change
 a decision, update the spec in the same change.
@@ -189,7 +189,7 @@ backend/   Python brain — main.py, coordinator.py, events.py, db.py,
 chart/     ONE fixed Helm chart (Chart.yaml, values.yaml defaults, templates/)
 frontend/  React + TS dashboard (SSE subscriber)
 scripts/   bash dev helpers (kind up, seed)
-docs/superpowers/specs/  the design spec
+docs/DESIGN.md  the design spec
 ```
 `tools/` = deterministic / no LLM. `agents/` = LLM / never touches cluster directly.
 This split IS the architecture. (Spec §15.4)
