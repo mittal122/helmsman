@@ -30,6 +30,14 @@ in real time**, plus a full **SRE console** to manage any workload in any namesp
   store.
 - **Durable** — Postgres event store + audit log (falls back to in-memory with no DB).
 
+## Run from Docker Hub (no source needed)
+
+```bash
+docker run -p 8000:8000 -e ALLOW_OPEN_DEV=1 -e COOKIE_INSECURE=1 \
+           -v "$HOME/.kube/config:/home/appuser/.kube/config:ro" mittal122/helmsman:1.0
+# open http://localhost:8000  (needs Docker + a running Kubernetes cluster)
+```
+
 ## Zero-to-running on a fresh machine (installs everything for you)
 
 No Docker, no cluster, no kubectl? These install **only what's missing** (present → skipped)
