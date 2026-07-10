@@ -364,10 +364,13 @@ async def test_failure_triggers_explanation(monkeypatch):
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
     await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())
-    types = []
+    events = []
     while not q.empty():
-        types.append((await q.get()).type)
-    assert "explanation" in types
+        events.append(await q.get())
+    # a runtime pod failure produces actionable guidance (deterministic + LLM enrichment)
+    g = next(e for e in events if e.type == "guidance")
+    assert "ImagePullBackOff" in g.data["items"][0]["problem"]
+    assert g.data.get("ai", {}).get("root_cause") == "bad image tag"  # LLM enrichment folded in
 
 @pytest.mark.asyncio
 async def test_explanation_failure_does_not_crash(monkeypatch):
@@ -386,10 +389,15 @@ async def test_explanation_failure_does_not_crash(monkeypatch):
     bus = EventBus(); q = bus.subscribe()
     appr = approvals_mod.Approvals(); mons = monitors_mod.Monitors()
     await coordinator.run(_cfg(mode="autonomous"), bus, appr, mons, breakers_mod.Breaker())  # must not raise
-    types = []
+    events = []
     while not q.empty():
-        types.append((await q.get()).type)
+        events.append(await q.get())
+    types = [e.type for e in events]
     assert "error" in types  # rollout still times out; no crash
+    # BUG FIX: LLM down (no API key) must NOT leak the raw SDK auth error into the feed…
+    assert not any("AI explanation unavailable" in (e.message or "") for e in events)
+    # …and the user still gets deterministic guidance for the pod failure
+    assert "guidance" in types
 
 def _cfg_auto(**over):
     base = {"name": "app", "image": "i:1", "namespace": "default", "port": 8080,

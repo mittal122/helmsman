@@ -31,39 +31,40 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
 
     explained: set = set()
 
-    async def explain(failure):
-        key = (failure.get("pod"), failure.get("type"))
-        if key in explained:
-            return
-        explained.add(key)
-        try:
-            ctx = {"failure_type": failure.get("type", ""),
-                   "pod_status": failure.get("pod", ""),
-                   "recent_events": failure.get("message", ""),
-                   "recent_logs": await asyncio.to_thread(monitor.get_logs, name, ns),
-                   "config_summary": f"{name} image={cfg.get('image','')} replicas={cfg.get('replicas','')}"}
-            result = await asyncio.to_thread(error_resolver.resolve, ctx)
-            await emit("explanation", current, f"Root cause: {result.get('root_cause','')}", result)
-        except Exception as e:
-            await emit("info", current, f"AI explanation unavailable: {e}")
-
-    async def guide(stage, issues):
+    async def _emit_guidance(stage, issues, failure=None):
         # Self-healing "guide" rung: a break we can't auto-fix still gets clear,
         # actionable guidance so the user knows exactly what to change. Deterministic
-        # catalog first (always works); LLM error-resolver enriches it best-effort.
+        # catalog ALWAYS produces guidance; the LLM error-resolver only enriches it,
+        # best-effort. A missing ANTHROPIC_API_KEY (or any LLM error) is swallowed —
+        # we never leak an SDK auth error into the feed.
         g = diagnostics.diagnose(stage, issues,
                                  {"name": name, "image": cfg.get("image", ""), "namespace": ns})
         try:
-            ctx = {"failure_type": f"{stage}Failed", "pod_status": "",
-                   "recent_events": "; ".join(str(i) for i in (issues if isinstance(issues, list) else [issues])),
-                   "recent_logs": "",
+            logs = await asyncio.to_thread(monitor.get_logs, name, ns) if failure else ""
+            ctx = {"failure_type": (failure.get("type") if failure else f"{stage}Failed") or "",
+                   "pod_status": (failure.get("pod") if failure else ""),
+                   "recent_events": (failure.get("message") if failure
+                                     else "; ".join(str(i) for i in (issues if isinstance(issues, list) else [issues]))),
+                   "recent_logs": logs,
                    "config_summary": f"{name} image={cfg.get('image','')} replicas={cfg.get('replicas','')}"}
             ai = await asyncio.to_thread(error_resolver.resolve, ctx)
             g["ai"] = {"root_cause": ai.get("root_cause", ""),
                        "recommended_action": ai.get("recommended_action", "")}
         except Exception:
-            pass  # no API key / LLM down — deterministic guidance still stands
+            pass  # LLM unavailable (e.g. no ANTHROPIC_API_KEY) — deterministic guidance stands
         await emit("guidance", stage, g["summary"], g)
+
+    async def explain(failure):
+        # runtime pod failure (CrashLoopBackOff / ImagePull / OOM / …) -> actionable guidance
+        key = (failure.get("pod"), failure.get("type"))
+        if key in explained:
+            return
+        explained.add(key)
+        issue = f"{failure.get('type','failure')} on {failure.get('pod','')}: {failure.get('message','')}".strip()
+        await _emit_guidance(current, [issue], failure)
+
+    async def guide(stage, issues):
+        await _emit_guidance(stage, issues)
 
     async def remediate(reason):
         rstage = "Remediate"
