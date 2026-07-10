@@ -18,6 +18,7 @@ services:
       retries: 10
 
   app:
+    image: helmsman:1.0     # matches scripts/package.sh — a loaded image is reused, no rebuild
     build: .
     depends_on:
       db:

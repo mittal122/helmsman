@@ -37,6 +37,24 @@ in real time**, plus a full **SRE console** to manage any workload in any namesp
 ```
 Open **http://localhost:8000**. Requires Docker/Podman + Python 3.12.
 
+## Send it to someone (one portable file)
+
+Build once, ship a single file — the receiver needs **only Docker** (no source, no
+Python, no kubectl/helm/trivy, works offline):
+
+```bash
+./scripts/package.sh            # -> helmsman-image.tar.gz  (send this file)
+```
+
+Receiver:
+```bash
+docker load < helmsman-image.tar.gz
+docker run -p 8000:8000 -e ALLOW_OPEN_DEV=1 -e COOKIE_INSECURE=1 \
+           -v "$HOME/.kube:/home/appuser/.kube:ro" helmsman:1.0
+# open http://localhost:8000  (mounts their kubeconfig so it can reach their cluster)
+```
+For durable history/audit, use the Compose stack below instead of `docker run`.
+
 ## Self-host (Docker + Postgres)
 
 ```bash

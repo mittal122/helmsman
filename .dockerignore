@@ -1,0 +1,21 @@
+# keep the build context (and image) lean — the Dockerfile only needs backend/, chart/, prompts/
+.venv
+.bin
+.git
+.github
+.pytest_cache
+**/__pycache__
+**/*.pyc
+docs
+scripts
+.superpowers
+*.tar
+*.tar.gz
+*.png
+.dockerignore
+Dockerfile
+docker-compose.yml
+README.md
+CLAUDE.md
+run.sh
+backend/tests
