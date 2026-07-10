@@ -19,9 +19,24 @@ a decision, update the spec in the same change.
 
 ## Current status (update this section as work progresses)
 
-- **Phases 0, 1, 2, 3, 4, 5 COMPLETE.** Phase 5 (hardening) was the final phase.
-  Pushed to `phase-5-hardening` on https://github.com/mittal122/helmsman (public).
-  Backend suite 98/98.
+- **Phases 0–5 COMPLETE + post-v1 productization in progress.** On `main`,
+  https://github.com/mittal122/helmsman (public). Backend suite 124/124.
+- **Post-v1: TWO SURFACES.** (1) **Deploy console** (`/`, `static/index.html`) — the
+  live SSE rollout of a NEW deploy (mockup dashboard: stepper, command/error console,
+  files/health/resources/endpoint panels, clickable auto-port-forward URL, error
+  extract with traceback+file:line, self-healing guidance + AI fix-prompt). (2) **SRE
+  Management console** (`/manage`, `static/manage.html`, `tools/cluster.py`) — reads
+  the LIVE cluster (source of truth, survives reload), manages ANY workload in ANY
+  namespace: topology summary (Service→Deployment→Pods + HPA/PDB/config relationships),
+  scale / stop(scale-0) / restart / autoscale(HPA) / logs / delete (2-step confirm,
+  server-enforced ?confirm=name). All mgmt endpoints token-gated, RFC1123-validated,
+  timeout-bounded, error-mapped (400/502/504). Rationale: the deploy stream is
+  ephemeral — don't replay it; query the cluster. Both consoles linked by a nav.
+- **Known follow-ups (roadmap):** event persistence to Postgres (true replay of a
+  running deploy's stream), per-user RBAC/multi-tenant, KEDA/VPA (traffic-based +
+  vertical autoscaling beyond CPU-HPA), metrics history graphs, cost-per-namespace,
+  pod exec/describe/events, ingress management, dark-launch/canary.
+- **Pre-management milestone:** Phase 5 (hardening) shipped. Backend suite was 98/98.
 - **Phase 5 delivered:** `auth.py` (`require_token` dependency — single **operator
   token** via `AUTH_TOKEN` env var, `Authorization: Bearer <token>` on every
   mutating endpoint, `hmac.compare_digest`; **default-open when unset**, for

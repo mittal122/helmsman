@@ -37,6 +37,9 @@
   .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:3px}
   .seg button{font:inherit;font-size:.76rem;border:0;background:transparent;color:var(--muted);padding:5px 12px;border-radius:6px;cursor:pointer;font-weight:600}
   .seg button.on{background:var(--accent);color:var(--ground)}
+  .topnav{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:3px}
+  .topnav a{font-size:.78rem;color:var(--muted);padding:5px 12px;border-radius:6px;text-decoration:none;font-weight:600}
+  .topnav a.on{background:var(--accent);color:var(--ground)}
   .status{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;font-weight:700;border-radius:999px;padding:5px 12px;background:var(--panel-2);color:var(--muted);border:1px solid var(--border)}
   .status .pulse{width:7px;height:7px;border-radius:50%;background:var(--faint)}
   .status[data-s=working]{background:var(--accent-dim);color:var(--accent);border-color:var(--accent)} .status[data-s=working] .pulse{background:var(--accent);animation:p 1.3s infinite}
@@ -151,6 +154,7 @@
     <div class="brand"><span class="logo">&#9096;</span><div>Helmsman<small>Deployment</small></div></div>
     <div class="appmeta"><span class="sep">&#9002;</span> <b id="m-name">—</b> <span class="sep">/</span> ns <b id="m-ns">—</b> <span class="sep">/</span> img <b id="m-img">—</b></div>
     <div class="spacer"></div>
+    <div class="topnav"><a href="/" class="on">Deploy</a><a href="/manage">Manage cluster</a></div>
     <div class="conn" id="conn"><span class="d"></span><span id="conn-t">connecting…</span></div>
     <div class="seg" id="modeseg"><button data-m="manual" class="on">Manual</button><button data-m="autonomous">Autonomous</button></div>
     <div class="status" id="status" data-s="idle"><span class="pulse"></span><span id="status-t">Idle</span></div>

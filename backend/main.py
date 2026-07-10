@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator, Field
@@ -12,7 +13,7 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
-from tools import rollback
+from tools import rollback, cluster
 from breakers import Breaker
 
 app = FastAPI(title="Helmsman")
@@ -153,6 +154,75 @@ async def delete_kubeconfig(name: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": kubeconfig_store.delete(valid)}
+
+# ---------- Cluster management (SRE console) — token-gated, error-mapped ----------
+_TG = [Depends(auth.require_token)]
+
+class ScaleRequest(BaseModel):
+    replicas: int = Field(ge=0, le=100)
+
+class AutoscaleRequest(BaseModel):
+    min: int = Field(ge=1, le=100)
+    max: int = Field(ge=1, le=100)
+    cpu: int = Field(ge=1, le=100)
+
+async def _cluster(fn, *args):
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="cluster call timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+@app.get("/namespaces", dependencies=_TG)
+async def namespaces():
+    return {"namespaces": await _cluster(cluster.list_namespaces)}
+
+@app.get("/namespaces/{ns}/workloads", dependencies=_TG)
+async def workloads(ns: str):
+    return {"workloads": await _cluster(cluster.list_workloads, ns)}
+
+@app.get("/namespaces/{ns}/workloads/{name}", dependencies=_TG)
+async def workload_summary(ns: str, name: str):
+    return await _cluster(cluster.get_summary, ns, name)
+
+@app.get("/namespaces/{ns}/workloads/{name}/logs", dependencies=_TG)
+async def workload_logs(ns: str, name: str, tail: int = 200):
+    return {"logs": await _cluster(cluster.get_logs, ns, name, min(max(tail, 1), 2000))}
+
+@app.post("/namespaces/{ns}/workloads/{name}/scale", dependencies=_TG)
+async def workload_scale(ns: str, name: str, req: ScaleRequest):
+    return await _cluster(cluster.scale, ns, name, req.replicas)
+
+@app.post("/namespaces/{ns}/workloads/{name}/stop", dependencies=_TG)
+async def workload_stop(ns: str, name: str):
+    return await _cluster(cluster.stop, ns, name)
+
+@app.post("/namespaces/{ns}/workloads/{name}/restart", dependencies=_TG)
+async def workload_restart(ns: str, name: str):
+    return await _cluster(cluster.restart, ns, name)
+
+@app.post("/namespaces/{ns}/workloads/{name}/autoscale", dependencies=_TG)
+async def workload_autoscale(ns: str, name: str, req: AutoscaleRequest):
+    return await _cluster(cluster.set_autoscale, ns, name, req.min, req.max, req.cpu)
+
+@app.post("/namespaces/{ns}/workloads/{name}/autoscale/disable", dependencies=_TG)
+async def workload_autoscale_off(ns: str, name: str):
+    return await _cluster(cluster.disable_autoscale, ns, name)
+
+@app.delete("/namespaces/{ns}/workloads/{name}", dependencies=_TG)
+async def workload_delete(ns: str, name: str, confirm: str = ""):
+    # two-step confirmation: the client must echo the exact workload name
+    if confirm != name:
+        raise HTTPException(status_code=400,
+                            detail="confirmation required: pass ?confirm=<workload name>")
+    return await _cluster(cluster.delete_app, ns, name)
+
+@app.get("/manage")
+async def manage():
+    return FileResponse(os.path.join(STATIC, "manage.html"))
 
 @app.get("/events")
 async def events():

@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman — Cluster Management</title>
+<style>
+  :root{--ground:#0C1218;--panel:#131C25;--panel-2:#1A2530;--raise:#20303C;--ink:#E9EFF3;--muted:#93A4B3;
+    --faint:#647585;--border:#243441;--accent:#2DD4BF;--accent-dim:#15413B;--good:#34D399;--good-dim:#123528;
+    --warn:#FBBF24;--warn-dim:#3A2E0E;--crit:#F87171;--crit-dim:#3A1A1A;--info:#60A5FA;
+    --mono:ui-monospace,Menlo,Consolas,monospace;--sans:-apple-system,"Segoe UI",system-ui,Roboto,Arial,sans-serif;}
+  :root[data-theme="light"]{--ground:#EEF2F5;--panel:#FFF;--panel-2:#F4F7F9;--raise:#EAEFF3;--ink:#0F1A22;
+    --muted:#516170;--faint:#8494A2;--border:#DDE5EB;--accent:#0F766E;--accent-dim:#DCEFEC;--good:#15803D;
+    --good-dim:#DCF2E5;--warn:#B45309;--warn-dim:#F6EBD5;--crit:#B91C1C;--crit-dim:#F6DEDE;--info:#2563EB;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+  .app{max-width:1220px;margin:0 auto;padding:18px}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px}
+  a{color:var(--accent)}
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:13px 18px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:750}
+  .brand .logo{width:26px;height:26px;border-radius:7px;background:var(--accent);color:var(--ground);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .brand small{font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:600;display:block;margin-top:1px}
+  .spacer{flex:1}
+  .nav{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:3px}
+  .nav a{font-size:.78rem;color:var(--muted);padding:5px 12px;border-radius:6px;text-decoration:none;font-weight:600}
+  .nav a.on{background:var(--accent);color:var(--ground)}
+  .conn{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+  .conn .d{width:7px;height:7px;border-radius:50%;background:var(--good)}
+  .icbtn{background:var(--panel-2);border:1px solid var(--border);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:14px}
+
+  .bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px}
+  label{font-size:11px;color:var(--faint);font-weight:600;margin-right:6px}
+  select,input{background:var(--panel-2);border:1px solid var(--border);color:var(--ink);padding:8px 10px;border-radius:8px;font-size:13px;font-family:inherit}
+  select:focus,input:focus{outline:none;border-color:var(--accent)}
+  .btn{font:inherit;font-weight:700;font-size:.8rem;border-radius:8px;padding:8px 14px;cursor:pointer;border:1px solid var(--border);background:var(--panel-2);color:var(--ink)}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:var(--ground);border-color:var(--accent)}
+  .btn.warn{color:var(--warn);border-color:var(--warn)}
+  .btn.danger{color:var(--crit);border-color:var(--crit)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:14px;margin-top:14px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px}
+  .phd{padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);font-weight:600;display:flex;align-items:center;gap:8px}
+  .phd .r{margin-left:auto;font-size:.64rem}
+  .list{max-height:70vh;overflow:auto;padding:8px}
+  .wl{padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin:6px 4px;cursor:pointer;background:var(--panel-2)}
+  .wl:hover{border-color:var(--accent)} .wl.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-dim)}
+  .wl .n{font-weight:700;font-family:var(--mono);font-size:.85rem;display:flex;align-items:center;gap:8px}
+  .wl .n .badge{font-size:.56rem;text-transform:uppercase;letter-spacing:.05em;padding:2px 6px;border-radius:5px;background:var(--accent-dim);color:var(--accent);font-weight:700}
+  .wl .m{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-top:4px;word-break:break-all}
+  .rep{font-family:var(--mono);font-size:.72rem;font-weight:700}
+  .rep.ok{color:var(--good)} .rep.warn{color:var(--warn)} .rep.zero{color:var(--faint)}
+
+  .detail{padding:16px}
+  .empty{padding:30px 16px;text-align:center;color:var(--faint);font-family:var(--mono);font-size:.82rem}
+  .dh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .dh h2{margin:0;font-size:1.05rem;font-family:var(--mono)}
+  .dh .img{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 16px;align-items:center}
+  .actions .mini{display:inline-flex;gap:6px;align-items:center;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:4px 8px}
+  .actions .mini input{width:60px;padding:5px 7px}
+  .sec{margin-top:16px} .sec h3{margin:0 0 8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);font-family:var(--mono)}
+  .rel{font-size:.72rem;color:var(--faint);font-family:var(--mono);margin:0 0 8px}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.76rem}
+  th{text-align:left;color:var(--faint);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--border);text-transform:uppercase;font-size:.64rem;letter-spacing:.05em}
+  td{padding:6px 8px;border-bottom:1px solid var(--border);color:var(--ink);word-break:break-all}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dot.ok{background:var(--good)} .dot.bad{background:var(--crit)} .dot.mid{background:var(--warn)}
+  .chipset{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-family:var(--mono);font-size:.72rem;border:1px solid var(--border);border-radius:7px;padding:5px 9px;background:var(--panel-2);color:var(--muted)}
+  .hpa{border:1px solid var(--accent);border-radius:9px;padding:10px 12px;background:var(--accent-dim);font-family:var(--mono);font-size:.78rem;color:var(--ink)}
+  pre.logs{background:var(--ground);border:1px solid var(--border);border-radius:9px;padding:10px;font-family:var(--mono);font-size:11.5px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:10px 16px;font-size:.85rem;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none;z-index:50}
+  .toast.on{display:block} .toast.err{border-color:var(--crit);color:var(--crit)}
+
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:60}
+  .modal.on{display:flex}
+  .modal .box{background:var(--panel);border:1px solid var(--crit);border-radius:14px;padding:20px;max-width:460px;width:calc(100% - 40px)}
+  .modal h3{margin:0 0 8px;color:var(--crit)}
+  .modal p{color:var(--muted);font-size:.88rem}
+  .modal code{font-family:var(--mono);color:var(--ink);background:var(--panel-2);padding:1px 6px;border-radius:5px}
+  .modal input{width:100%;margin:10px 0}
+  .modal .row{display:flex;gap:9px;justify-content:flex-end;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand"><span class="logo">&#9096;</span><div>Helmsman<small>Cluster Management</small></div></div>
+    <div class="spacer"></div>
+    <div class="conn" id="conn"><span class="d"></span><span id="conn-t">cluster</span></div>
+    <div class="nav"><a href="/">Deploy</a><a href="/manage" class="on">Manage</a></div>
+    <button class="icbtn" id="theme-btn" title="Theme">◑</button>
+    <button class="icbtn" id="settings-btn" title="Operator token">&#128273;</button>
+  </div>
+  <div id="settings" style="display:none;margin-top:10px"><label>Operator token</label><input id="token" type="password" placeholder="Bearer token (optional)" style="width:280px"></div>
+
+  <div class="bar">
+    <span><label>Namespace</label>
+      <select id="ns"></select></span>
+    <button class="btn" id="refresh-ns">↻ namespaces</button>
+    <button class="btn" id="refresh-wl">↻ workloads</button>
+    <span class="spacer"></span>
+    <span class="conn" id="autoref"><span class="d"></span><span>auto-refresh 5s</span></span>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="phd">Workloads <span class="r" id="wl-count"></span></div>
+      <div class="list" id="wl-list"><div class="empty">pick a namespace</div></div>
+    </div>
+    <div class="panel">
+      <div class="phd">Details</div>
+      <div class="detail" id="detail"><div class="empty">select a workload to see its topology &amp; controls</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal"><div class="box">
+  <h3>⚠ Delete workload</h3>
+  <p>This permanently deletes <code id="del-name"></code> in namespace <code id="del-ns"></code> and everything it owns. This cannot be undone.</p>
+  <p>Type the workload name <code id="del-echo"></code> to confirm:</p>
+  <input id="del-input" placeholder="workload name">
+  <div class="row"><button class="btn" id="del-cancel">Cancel</button><button class="btn danger" id="del-go" disabled>Delete permanently</button></div>
+</div></div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(id){return document.getElementById(id);};
+  var el=function(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
+  var curNs="", curName="", timer=null;
+
+  var tokenEl=$("token");tokenEl.value=localStorage.getItem("helmsman_token")||"";
+  tokenEl.addEventListener("change",function(){localStorage.setItem("helmsman_token",tokenEl.value);});
+  $("settings-btn").onclick=function(){var s=$("settings");s.style.display=s.style.display==="none"?"block":"none";};
+  $("theme-btn").onclick=function(){var r=document.documentElement,n=r.getAttribute("data-theme")==="dark"?"light":"dark";r.setAttribute("data-theme",n);localStorage.setItem("helmsman_theme",n);};
+  (function(){var t=localStorage.getItem("helmsman_theme");if(t)document.documentElement.setAttribute("data-theme",t);})();
+  function headers(){var h={"Content-Type":"application/json"};if(tokenEl.value)h["Authorization"]="Bearer "+tokenEl.value;return h;}
+  function toast(msg,err){var t=$("toast");t.textContent=msg;t.className="toast on"+(err?" err":"");setTimeout(function(){t.className="toast";},3200);}
+  async function api(method,path,body){
+    var o={method:method,headers:headers()};if(body)o.body=JSON.stringify(body);
+    var r=await fetch(path,o);var d=null;try{d=await r.json();}catch(_){}
+    if(!r.ok){throw new Error((d&&d.detail)||("HTTP "+r.status));}
+    return d;
+  }
+
+  async function loadNamespaces(){
+    try{var d=await api("GET","/namespaces");var sel=$("ns");var cur=sel.value;
+      sel.textContent="";d.namespaces.forEach(function(n){var o=document.createElement("option");o.value=n.name;o.textContent=n.name+"  ("+n.status+")";sel.appendChild(o);});
+      if(cur)sel.value=cur; curNs=sel.value; loadWorkloads();
+    }catch(e){toast("namespaces: "+e.message,true);}
+  }
+  async function loadWorkloads(){
+    curNs=$("ns").value; if(!curNs)return;
+    try{var d=await api("GET","/namespaces/"+curNs+"/workloads");renderWorkloads(d.workloads);}
+    catch(e){toast("workloads: "+e.message,true);$("wl-list").textContent="";$("wl-list").appendChild(el("div","empty",e.message));}
+  }
+  function repClass(r,de){return de===0?"zero":(r>=de?"ok":"warn");}
+  function renderWorkloads(ws){
+    var host=$("wl-list");host.textContent="";$("wl-count").textContent=ws.length+" in "+curNs;
+    if(!ws.length){host.appendChild(el("div","empty","no deployments in this namespace"));return;}
+    ws.forEach(function(w){
+      var c=el("div","wl"+(w.name===curName?" sel":""));c.onclick=function(){openWorkload(w.name);};
+      var n=el("div","n");n.appendChild(document.createTextNode(w.name));
+      if(w.managed)n.appendChild(el("span","badge","helmsman"));
+      var rep=el("span","rep "+repClass(w.ready,w.desired),"  "+w.ready+"/"+w.desired);n.appendChild(rep);
+      c.appendChild(n);c.appendChild(el("div","m",w.image||"(no image)"));host.appendChild(c);
+    });
+  }
+
+  async function openWorkload(name){
+    curName=name; renderWorkloads.__last&&0;
+    document.querySelectorAll(".wl").forEach(function(x){x.classList.toggle("sel",x.querySelector(".n").textContent.indexOf(name)===0);});
+    await refreshDetail();
+    if(timer)clearInterval(timer);
+    timer=setInterval(refreshDetail,5000);
+  }
+  async function refreshDetail(){
+    if(!curName)return;
+    try{var s=await api("GET","/namespaces/"+curNs+"/workloads/"+curName);renderDetail(s);}
+    catch(e){$("detail").textContent="";$("detail").appendChild(el("div","empty",e.message));}
+  }
+  function td(txt,cls){var d=el("td",null);if(cls){var dot=el("span","dot "+cls);d.appendChild(dot);}d.appendChild(document.createTextNode(txt));return d;}
+  function renderDetail(s){
+    var d=$("detail");d.textContent="";
+    // header
+    var dh=el("div","dh");dh.appendChild(el("h2",null,s.name));
+    var rc=s.desired===0?"zero":(s.ready>=s.desired?"ok":"warn");
+    dh.appendChild(el("span","rep "+rc,s.ready+"/"+s.desired+" ready"));
+    dh.appendChild(el("span","img",s.image));
+    if(s.managed)dh.appendChild(el("span","badge","helmsman"));
+    d.appendChild(dh);
+    d.appendChild(el("div","rel","namespace "+s.namespace+"  ·  strategy "+(s.strategy||"—")+"  ·  selector "+JSON.stringify(s.selector)));
+
+    // actions
+    var a=el("div","actions");
+    var scaleWrap=el("span","mini");scaleWrap.appendChild(el("label",null,"scale"));
+    var scaleIn=el("input");scaleIn.type="number";scaleIn.value=s.desired;scaleIn.min=0;scaleWrap.appendChild(scaleIn);
+    var scaleBtn=el("button","btn","Apply");scaleBtn.onclick=function(){act("scale",{replicas:parseInt(scaleIn.value,10)});};scaleWrap.appendChild(scaleBtn);
+    a.appendChild(scaleWrap);
+    var restart=el("button","btn","↻ Restart");restart.onclick=function(){act("restart");};a.appendChild(restart);
+    var stop=el("button","btn warn","■ Stop (scale 0)");stop.onclick=function(){act("stop");};a.appendChild(stop);
+    var del=el("button","btn danger","🗑 Delete");del.onclick=openDelete;a.appendChild(del);
+    var logsBtn=el("button","btn","View logs");logsBtn.onclick=loadLogs;a.appendChild(logsBtn);
+    d.appendChild(a);
+
+    // autoscale controls
+    var asSec=el("div","sec");asSec.appendChild(el("h3",null,"Autoscaling (HPA)"));
+    if(s.hpa&&s.hpa.length){
+      var h=s.hpa[0];var box=el("div","hpa");
+      box.textContent="Active: "+h.min+"–"+h.max+" replicas @ "+ (h.targetCPU||"?") +"% CPU  ·  now "+(h.current!=null?h.current:"?")+" replicas / "+(h.currentCPU!=null?h.currentCPU+"%":"?")+" CPU";
+      asSec.appendChild(box);
+      var offb=el("button","btn","Disable autoscaling");offb.style.marginTop="8px";offb.onclick=function(){act("autoscale/disable");};asSec.appendChild(offb);
+    } else {
+      var w=el("div","actions");
+      var mn=mini("min",2),mx=mini("max",6),cp=mini("cpu %",70);
+      w.appendChild(mn.wrap);w.appendChild(mx.wrap);w.appendChild(cp.wrap);
+      var onb=el("button","btn primary","Enable autoscaling");
+      onb.onclick=function(){act("autoscale",{min:parseInt(mn.in.value,10),max:parseInt(mx.in.value,10),cpu:parseInt(cp.in.value,10)});};
+      w.appendChild(onb);asSec.appendChild(w);
+      asSec.appendChild(el("div","rel","traffic ↑ → more pods, traffic ↓ → fewer (needs metrics-server + CPU requests, which the chart sets)"));
+    }
+    d.appendChild(asSec);
+
+    // services -> deployment -> pods
+    var svcSec=el("div","sec");svcSec.appendChild(el("h3",null,"Services routing to this deployment"));
+    if(s.services.length){svcSec.appendChild(rel("Service ──routes to──▶ Deployment "+s.name));
+      svcSec.appendChild(table(["Service","Type","ClusterIP","Ports"], s.services.map(function(x){return [x.name,x.type,x.clusterIP,(x.ports||[]).join(", ")];})));}
+    else svcSec.appendChild(el("div","empty","no service routes to this deployment"));
+    d.appendChild(svcSec);
+
+    var podSec=el("div","sec");podSec.appendChild(el("h3",null,"Pods ("+s.pods.length+")"));
+    podSec.appendChild(rel("Deployment "+s.name+" ──manages──▶ Pods"));
+    if(s.pods.length){
+      var t=el("table");var thead=el("tr");["","Pod","Phase","Ready","Restarts","Node","Note"].forEach(function(h){thead.appendChild(el("th",null,h));});t.appendChild(thead);
+      s.pods.forEach(function(p){
+        var cls=p.phase==="Running"&&!p.reason?"ok":(p.reason?"bad":"mid");
+        var tr=el("tr");
+        var d0=el("td",null);d0.appendChild(el("span","dot "+cls));tr.appendChild(d0);
+        [p.name,p.phase,p.ready,String(p.restarts),p.node||"—",p.reason||"—"].forEach(function(v){tr.appendChild(el("td",null,v));});
+        t.appendChild(tr);
+      });
+      podSec.appendChild(t);
+    } else podSec.appendChild(el("div","empty","no pods (scaled to 0?)"));
+    d.appendChild(podSec);
+
+    // pdb + config
+    if(s.pdb&&s.pdb.length){var ps=el("div","sec");ps.appendChild(el("h3",null,"Disruption budget"));
+      ps.appendChild(table(["PDB","minAvailable","maxUnavailable"],s.pdb.map(function(x){return [x.name,x.minAvailable!=null?x.minAvailable:"—",x.maxUnavailable!=null?x.maxUnavailable:"—"];})));d.appendChild(ps);}
+    if((s.configMaps&&s.configMaps.length)||(s.secrets&&s.secrets.length)){
+      var cs=el("div","sec");cs.appendChild(el("h3",null,"Config referenced"));var cw=el("div","chipset");
+      s.configMaps.forEach(function(c){cw.appendChild(el("span","chip","ConfigMap · "+c));});
+      s.secrets.forEach(function(c){cw.appendChild(el("span","chip","Secret · "+c+" ••••"));});
+      cs.appendChild(cw);d.appendChild(cs);
+    }
+    // logs mount
+    var lg=el("div","sec");lg.id="logs-sec";d.appendChild(lg);
+  }
+  function mini(label,val){var wrap=el("span","mini");wrap.appendChild(el("label",null,label));var i=el("input");i.type="number";i.value=val;wrap.appendChild(i);return {wrap:wrap,in:i};}
+  function rel(txt){return el("div","rel",txt);}
+  function table(cols,rows){var t=el("table");var h=el("tr");cols.forEach(function(c){h.appendChild(el("th",null,c));});t.appendChild(h);
+    rows.forEach(function(r){var tr=el("tr");r.forEach(function(v){tr.appendChild(el("td",null,String(v)));});t.appendChild(tr);});return t;}
+
+  async function act(action,body){
+    try{await api("POST","/namespaces/"+curNs+"/workloads/"+curName+"/"+action,body);toast(action.split("/")[0]+" ✓");await refreshDetail();await loadWorkloads();}
+    catch(e){toast(action+": "+e.message,true);}
+  }
+  async function loadLogs(){
+    var sec=$("logs-sec");sec.textContent="";sec.appendChild(el("h3",null,"Logs (last 200 lines)"));
+    var pre=el("pre","logs","loading…");sec.appendChild(pre);
+    try{var d=await api("GET","/namespaces/"+curNs+"/workloads/"+curName+"/logs?tail=200");pre.textContent=d.logs||"(no logs)";}
+    catch(e){pre.textContent="logs unavailable: "+e.message;}
+  }
+
+  // delete 2-step
+  function openDelete(){
+    $("del-name").textContent=curName;$("del-ns").textContent=curNs;$("del-echo").textContent=curName;
+    $("del-input").value="";$("del-go").disabled=true;$("modal").classList.add("on");$("del-input").focus();
+  }
+  $("del-input").addEventListener("input",function(){$("del-go").disabled=$("del-input").value!==curName;});
+  $("del-cancel").onclick=function(){$("modal").classList.remove("on");};
+  $("del-go").onclick=async function(){
+    $("modal").classList.remove("on");
+    try{var d=await api("DELETE","/namespaces/"+curNs+"/workloads/"+encodeURIComponent(curName)+"?confirm="+encodeURIComponent(curName));
+      toast("deleted "+curName+" ("+(d.method||"")+")");curName="";if(timer)clearInterval(timer);
+      $("detail").textContent="";$("detail").appendChild(el("div","empty","workload deleted"));await loadWorkloads();
+    }catch(e){toast("delete: "+e.message,true);}
+  };
+
+  $("ns").onchange=function(){curName="";loadWorkloads();};
+  $("refresh-ns").onclick=loadNamespaces;
+  $("refresh-wl").onclick=loadWorkloads;
+  loadNamespaces();
+})();
+</script>
+</body>
+</html>
