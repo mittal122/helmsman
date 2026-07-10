@@ -9,129 +9,97 @@ in real time**, plus a full **SRE console** to manage any workload in any namesp
 > deterministic and tested; the LLM is advisory only and never writes the YAML applied
 > to the cluster.
 
-## Features
+## 🚀 Get started (clone & run — that's it)
 
-- **Deploy console** (`/`) — live activity stream: the real `helm`/`kubectl` commands,
-  raw errors (with a copy-able report incl. the exact `file:line` when it's a platform
-  bug), a 9-stage progress stepper, generated files, pod health, CPU/mem, and a
-  **clickable auto-port-forward URL**.
-- **SRE management console** (`/manage`) — browse **any namespace → any workload** (even
-  ones Helmsman didn't deploy): full topology summary (**Service → Deployment → Pods** +
-  HPA/PDB/Config), and actions: **scale, stop, restart, autoscale (HPA), logs, delete
-  (2-step confirm), and ▶ Open app** (port-forward → clickable URL, auto-stops when you
-  close the window).
-- **Self-healing** — deterministic auto-rollback on failure (behind a circuit breaker),
-  and when it can't auto-fix, clear guidance + an **AI fix-prompt you can paste into any
-  AI**.
-- **Validation gate** — `kubeconform` + `kubectl --dry-run=server` + `kube-score`, and a
-  `trivy` image-scan gate, before anything reaches the cluster.
-- **Security** — operator-token auth on every mutating endpoint, secret redaction
-  (`••••`), RFC1123 input validation, subprocess timeouts, encrypted-at-rest kubeconfig
-  store.
-- **Durable** — Postgres event store + audit log (falls back to in-memory with no DB).
+You do **not** need Docker, Kubernetes, or any tool installed first. The setup script
+checks your machine and installs **only what's missing**, creates a local cluster, and
+starts the app.
 
-## Run from Docker Hub (no source needed)
-
+**Linux / macOS / WSL2:**
 ```bash
-docker run -p 8000:8000 -e ALLOW_OPEN_DEV=1 -e COOKIE_INSECURE=1 \
-           -v "$HOME/.kube/config:/home/appuser/.kube/config:ro" mittal122/helmsman:1.0
-# open http://localhost:8000  (needs Docker + a running Kubernetes cluster)
+git clone https://github.com/mittal122/helmsman
+cd helmsman
+./setup.sh
 ```
 
-## Zero-to-running on a fresh machine (installs everything for you)
-
-No Docker, no cluster, no kubectl? These install **only what's missing** (present → skipped)
-and then start the app — no manual setup, no googling:
-
-```bash
-# Linux / macOS / WSL2
-./setup.sh        # installs Docker + Python if missing, then hands off to run.sh
-```
+**Windows 10/11:**
 ```bat
-:: Windows 10/11 (native, winget-based)
-setup.bat         :: installs Docker Desktop + kubectl + minikube + helm if missing, then runs
+git clone https://github.com/mittal122/helmsman
+cd helmsman
+setup.bat
 ```
-Open **http://localhost:8000**. (Windows tip: the most reliable path is WSL2 + `./setup.sh` —
-Docker Desktop runs on WSL2 anyway.)
+> No git? Download the ZIP from the GitHub page (green **Code** button → **Download ZIP**),
+> extract it, then run the script inside.
 
-## Quick start (if Docker + Python are already installed)
+Then open **http://localhost:8000**.
 
-```bash
-./run.sh          # auto-installs the k8s CLIs into ./.bin, brings up a kind cluster, serves :8000
-```
-Open **http://localhost:8000**.
+First run takes a few minutes (it downloads what's missing) and needs an internet
+connection. Everything after that is instant. On Linux it may ask for your password
+(to install Docker) — if it just installed Docker, log out/in once and re-run `./setup.sh`.
 
-## Send it to someone (one portable file)
+## Deploy your app
 
-Build once, ship a single file — the receiver needs **only Docker** (no source, no
-Python, no kubectl/helm/trivy, works offline):
+1. Open **http://localhost:8000**.
+2. In **Deploy**, enter your container image (e.g. `yourname/your-app:1.0`), a name, port,
+   and replicas → hit **Deploy**. Watch every step live.
+3. Use **Manage** to scale, view logs, autoscale, open the app's URL, or delete — for any
+   app in any namespace.
 
-```bash
-./scripts/package.sh            # -> helmsman-image.tar.gz  (send this file)
-```
+> Helmsman deploys a **pre-built container image**. Don't have one yet? Use the
+> **"Ask agent: containerize"** button to generate a Dockerfile from a description.
 
-Receiver:
-```bash
-docker load < helmsman-image.tar.gz
-docker run -p 8000:8000 -e ALLOW_OPEN_DEV=1 -e COOKIE_INSECURE=1 \
-           -v "$HOME/.kube:/home/appuser/.kube:ro" helmsman:1.0
-# open http://localhost:8000  (mounts their kubeconfig so it can reach their cluster)
-```
-For durable history/audit, use the Compose stack below instead of `docker run`.
+## Configuration (optional)
 
-## Self-host (Docker + Postgres)
-
-```bash
-export AUTH_TOKEN=change-me
-export KUBECONFIG_ENC_KEY=$(python -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')
-docker compose up --build
-```
-Mounts your `~/.kube/config` read-only so it can reach your cluster.
-
-## Portability
-
-| Target | How | Status |
-|---|---|---|
-| Linux / macOS / WSL2, **any CPU** | `./setup.sh` (host: Python + arch-correct CLIs) | ✅ tested |
-| Any OS with Docker | `docker compose up --build` (builds native for your arch) | ✅ tested |
-| Send one file → amd64 machine | `./scripts/package.sh` → `helmsman-image.tar.gz` | ✅ tested |
-| Send one file → Apple Silicon / ARM | `./scripts/package.sh helmsman:1.0 linux/arm64` | ✅ cross-arch build supported |
-| Windows (native) | `setup.bat` (winget) | ⚠️ best-effort; use WSL2 + `./setup.sh` for the tested path |
-
-No hardcoded paths or secrets; all config via env. Needs only Docker + a Kubernetes
-cluster (the setup scripts create a local one for you).
-
-## Configuration (env vars)
+All via environment variables — the defaults work for local use:
 
 | Var | Effect |
 |---|---|
-| `AUTH_TOKEN` | If set, every mutating endpoint requires `Authorization: Bearer <token>`. Unset = open (local dev). |
-| `KUBECONFIG_ENC_KEY` | Fernet key enabling the encrypted kubeconfig store (multi-cluster). |
-| `DATABASE_URL` | Postgres DSN for the durable event store + audit log. Unset = in-memory. |
-| `KUBECONFIG` | Which cluster to manage (standard kube context). |
-| `JWT_SECRET` | Signing secret for session tokens (set a strong value in prod; defaults to `AUTH_TOKEN`). |
-| `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | Creates the first admin on empty DB. |
-| `COOKIE_INSECURE=1` | Allow the session cookie over plain http (local dev only). Default: Secure (HTTPS-only). |
-| `ALLOW_OPEN_DEV=1` | Zero-config open access when nothing is configured (local dev). **Unset in production** — auth is then always enforced (secure by default). |
+| `AUTH_TOKEN` / users | Turn on login + roles (viewer/operator/admin). Unset = no login (local). |
+| `DATABASE_URL` | Postgres for durable deploy history + audit log. Unset = in-memory. |
+| `KUBECONFIG` | Which cluster to manage. The setup script points at the local one it created. |
+| `KUBECONFIG_ENC_KEY` | Enables the encrypted multi-cluster kubeconfig store. |
 
-## Endpoints (highlights)
+## Features
 
-`GET /healthz` · `GET /readyz` · `GET /history` · `GET /audit` · `POST /deploy` ·
-`GET /namespaces` · `GET /namespaces/{ns}/workloads[/{name}]` · scale/stop/restart/
-autoscale/logs/forward · `DELETE .../{name}?confirm=<name>`. Full OpenAPI at `/docs`.
+- **Deploy console** — live stream of the real `helm`/`kubectl` commands + raw errors
+  (with a copy-able report incl. the exact `file:line`), a 9-stage progress bar, generated
+  files, pod health, CPU/mem, and a **clickable auto-port-forward URL**.
+- **SRE management console** — browse any namespace → any workload: topology summary
+  (**Service → Deployment → Pods** + HPA/PDB/Config) + scale/stop/restart/autoscale/logs/
+  delete (2-step)/**▶ Open app**.
+- **Self-healing** — deterministic auto-rollback on failure, and when it can't auto-fix,
+  clear guidance + an **AI fix-prompt you can paste into any AI**.
+- **Validation + scan gate** — `kubeconform` + `kubectl --dry-run=server` + `kube-score` +
+  `trivy` before anything reaches the cluster.
+- **Multi-user (optional)** — accounts, JWT sessions, RBAC, per-user audit trail.
+- **Durable** — Postgres event store + audit log (in-memory fallback with no DB).
 
 ## Development
 
 ```bash
-cd backend && python -m pytest -q      # 134 tests
+cd backend && python -m pytest -q      # 136 tests
 ```
 
-## Production maturity
+## Advanced — other ways to run (only if you already know Docker)
 
-Tier 1 (done): durable state (Postgres) + audit, health/readiness probes, containerized,
-CI, MIT-licensed, operator-token auth, graceful shutdown.
-Tier 2 (roadmap for multi-tenant SaaS): per-user RBAC + enforced kubeconfig isolation,
-horizontal scale/HA, TLS + rate-limiting, cloud-cluster E2E, KEDA/VPA autoscaling.
+<details><summary>Already have Docker + a cluster · self-host with Postgres · send a single file</summary>
+
+```bash
+# Already have Docker + a running cluster? Run the published image directly:
+docker run --rm --network host -e ALLOW_OPEN_DEV=1 -e COOKIE_INSECURE=1 \
+  -v "$HOME/.kube/config:/home/appuser/.kube/config:ro" mittal122/helmsman:1.0
+
+# Self-host with durable Postgres (multi-user, audit):
+export AUTH_TOKEN=change-me
+docker compose up          # app + Postgres
+
+# Package into ONE file to send to someone (they only need Docker):
+./scripts/package.sh       # -> helmsman-image.tar.gz
+#   receiver: docker load < helmsman-image.tar.gz  &&  docker run ... helmsman:1.0
+#   Apple Silicon / ARM:  ./scripts/package.sh helmsman:1.0 linux/arm64
+```
+Image on Docker Hub: `mittal122/helmsman:1.0`.
+</details>
 
 ## License
 
