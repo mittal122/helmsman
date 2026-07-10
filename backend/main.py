@@ -226,7 +226,7 @@ async def login(req: LoginRequest):
     await store.append_audit(u["email"], "login", u["email"], True)
     resp = JSONResponse({"token": token, "email": u["email"], "role": u["role"]})
     resp.set_cookie("helmsman_session", token, httponly=True, secure=COOKIE_SECURE,
-                    samesite="lax", max_age=auth.JWT_TTL_S)
+                    samesite="strict", max_age=auth.JWT_TTL_S)
     return resp
 
 @app.get("/auth/me")
@@ -236,7 +236,7 @@ async def me(user: dict = Depends(auth.current_user)):
 @app.post("/auth/logout")
 async def logout():
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("helmsman_session", httponly=True, secure=COOKIE_SECURE, samesite="lax")
+    resp.delete_cookie("helmsman_session", httponly=True, secure=COOKIE_SECURE, samesite="strict")
     return resp
 
 @app.get("/users", dependencies=_RA)

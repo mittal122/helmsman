@@ -57,6 +57,7 @@ Mounts your `~/.kube/config` read-only so it can reach your cluster.
 | `JWT_SECRET` | Signing secret for session tokens (set a strong value in prod; defaults to `AUTH_TOKEN`). |
 | `BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | Creates the first admin on empty DB. |
 | `COOKIE_INSECURE=1` | Allow the session cookie over plain http (local dev only). Default: Secure (HTTPS-only). |
+| `ALLOW_OPEN_DEV=1` | Zero-config open access when nothing is configured (local dev). **Unset in production** — auth is then always enforced (secure by default). |
 
 ## Endpoints (highlights)
 

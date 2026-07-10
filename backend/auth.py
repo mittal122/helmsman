@@ -12,19 +12,29 @@ Enforcement model (backward-compatible):
 """
 import contextvars
 import hmac
+import logging
 import os
+import secrets
 import time
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import Depends, Header, HTTPException, Request
 
 import store
 
+log = logging.getLogger("helmsman")
 ROLES = {"viewer": 1, "operator": 2, "admin": 3}
-JWT_SECRET = (os.environ.get("JWT_SECRET") or os.environ.get("AUTH_TOKEN")
-              or "dev-insecure-secret-change-me-in-production-please")   # >=32 bytes
+
+# JWT signing key: env only. NO hardcoded fallback (a known secret in the repo could
+# forge tokens). If unset, use a random per-process secret — sessions won't survive a
+# restart, which nudges production to set JWT_SECRET while staying safe by default.
+_env_secret = os.environ.get("JWT_SECRET") or os.environ.get("AUTH_TOKEN")
+if _env_secret:
+    JWT_SECRET = _env_secret
+else:
+    JWT_SECRET = secrets.token_urlsafe(48)
+    log.warning("JWT_SECRET not set — using an ephemeral random secret (sessions reset on restart)")
 JWT_TTL_S = int(os.environ.get("JWT_TTL_S", "43200"))   # 12h
 _ph = PasswordHasher()
 _user_ctx: contextvars.ContextVar = contextvars.ContextVar("user", default=None)
@@ -35,8 +45,7 @@ def hash_password(p: str) -> str:
 
 def verify_password(pw_hash: str, p: str) -> bool:
     try:
-        _ph.verify(pw_hash, p)
-        return True
+        return bool(_ph.verify(pw_hash, p))
     except Exception:
         return False
 
@@ -58,7 +67,7 @@ async def _auth_configured() -> bool:
     try:
         return (await store.user_count()) > 0
     except Exception:
-        return False
+        return True   # fail CLOSED: if we can't tell, assume configured -> enforce auth
 
 # ---------- identity dependency ----------
 async def current_user(request: Request, authorization: str = Header(None)) -> dict:
@@ -77,7 +86,9 @@ async def current_user(request: Request, authorization: str = Header(None)) -> d
         if payload and payload.get("sub"):
             u = {"email": payload["sub"], "role": payload.get("role", "viewer")}
             _user_ctx.set(u); return u
-    if not await _auth_configured():
+    # secure by default: open (no-auth) admin mode only when EXPLICITLY enabled AND
+    # nothing is configured. Production leaves ALLOW_OPEN_DEV unset -> always enforced.
+    if os.environ.get("ALLOW_OPEN_DEV") == "1" and not await _auth_configured():
         u = {"email": "local@dev", "role": "admin"}
         _user_ctx.set(u); return u
     raise HTTPException(status_code=401, detail="authentication required")

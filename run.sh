@@ -125,6 +125,10 @@ else say "Installing metrics-server"; scripts/monitoring-up.sh || warn "metrics-
 [ -z "${KUBECONFIG_ENC_KEY:-}" ]  && warn "KUBECONFIG_ENC_KEY unset — /kubeconfigs store disabled; deploys use the ambient kind cluster"
 
 # ---- 7. serve ----
+# local convenience: zero-config open access + http cookie. Production leaves these
+# unset (auth enforced, Secure cookies) — see README.
+export ALLOW_OPEN_DEV="${ALLOW_OPEN_DEV:-1}"
+export COOKIE_INSECURE="${COOKIE_INSECURE:-1}"
 say "Backend live at http://localhost:${PORT}   (Ctrl-C to stop)"
 cd backend
 exec uvicorn main:app --port "$PORT"
