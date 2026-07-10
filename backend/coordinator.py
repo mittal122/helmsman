@@ -110,6 +110,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Detect capabilities and disable what the cluster can't serve
         current = "Detect"
         await emit("stage_enter", "Detect", "Checking cluster capabilities")
+        await emit("command", "Detect", "kubectl version -o json --request-timeout=5s")
         # Preflight: fail fast + visibly if the cluster API is unreachable, instead of
         # stalling on a downstream kubectl/helm call with no feedback.
         reachable, detail = await asyncio.to_thread(deploy.cluster_reachable)
@@ -120,6 +121,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await guide("Detect", [f"connection to {target} failed: {detail}"])
             return
         await emit("info", "Detect", f"Cluster reachable ({detail})")
+        await emit("command", "Detect", "kubectl get ingressclass; kubectl get apiservices v1beta1.metrics.k8s.io")
         caps = await asyncio.to_thread(deploy.detect_capabilities)
         if cfg.get("ingress_host") and not caps["ingress_controller"]:
             await emit("info", "Detect",
@@ -133,6 +135,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Generate
         current = "Generate"
         await emit("stage_enter", "Generate", "Rendering manifests via Helm")
+        await emit("command", "Generate", f"helm template {name} ./chart -f values.yaml -n {ns}")
         rendered = await asyncio.to_thread(manifests.render, cfg)
         await emit("manifest", "Generate", "Rendered manifests", {"yaml": rendered})
         estimate = await asyncio.to_thread(cost.estimate, rendered)
@@ -143,6 +146,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Validate
         current = "Validate"
         await emit("stage_enter", "Validate", "Validating manifests")
+        await emit("command", "Validate", "kubeconform -strict -  |  kubectl apply --dry-run=server -f -  |  kube-score score -")
         ok, issues = await asyncio.to_thread(validate.validate, rendered, ns)
         if not ok:
             await emit("error", "Validate", "Validation failed", {"issues": issues})
@@ -169,6 +173,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Scan (image vulns gate + advisory misconfig)
         current = "Scan"
         await emit("stage_enter", "Scan", "Scanning image and manifests")
+        await emit("command", "Scan", f"trivy image --severity HIGH,CRITICAL {cfg['image']}")
         img_scan = await asyncio.to_thread(scan.scan_image, cfg["image"])
         cfg_scan = await asyncio.to_thread(scan.scan_config, rendered)
         await emit("scan", "Scan", img_scan["summary"],
@@ -188,13 +193,14 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Deploy
         current = "Deploy"
         await emit("stage_enter", "Deploy", "Applying to cluster")
-        await emit("command", "Deploy", f"helm upgrade --install {name} chart")
+        await emit("command", "Deploy", f"helm upgrade --install {name} ./chart -n {ns} --create-namespace")
         await asyncio.to_thread(deploy.install, cfg)
         await emit("stage_exit", "Deploy", "Applied to cluster")
 
         # Verify
         current = "Verify"
         await emit("stage_enter", "Verify", "Waiting for rollout")
+        await emit("command", "Verify", f"kubectl get deploy {name} -n {ns} -o json   # poll readyReplicas")
         last = None
         seen_failures: set = set()
         for _ in range(ROLLOUT_TIMEOUT_S // max(POLL_INTERVAL_S, 1)):
@@ -231,6 +237,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # Monitor (continuous, stoppable)
         current = "Monitor"
         await emit("stage_enter", "Monitor", "Monitoring deployment")
+        await emit("command", "Monitor", f"kubectl get pods -l app.kubernetes.io/name={name} -n {ns}; kubectl top pods")
         monitors.start(name)   # reset any stale stop flag from a prior run of this name
         prev_fail_keys: set = set()
         for _ in range(MONITOR_MAX_CYCLES):
