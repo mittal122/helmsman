@@ -108,6 +108,13 @@ class DeployRequest(BaseModel):
             raise ValueError("invalid git repo URL (must be https://… or git@…)")
         return v
 
+    @field_validator("git_branch", "git_ref")
+    @classmethod
+    def _valid_ref(cls, v):
+        if v and not builder.valid_ref(v):
+            raise ValueError("invalid git ref (safe chars only, no leading '-')")
+        return v
+
     @model_validator(mode="after")
     def _image_or_repo(self):
         if not self.image and not self.git_repo:

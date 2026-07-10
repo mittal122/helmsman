@@ -61,6 +61,12 @@ def test_deploy_rejects_bad_git_url():
     r = client.post("/deploy", json={"name": "app", "git_repo": "ftp://x/y; rm -rf /"})
     assert r.status_code == 422
 
+def test_deploy_rejects_flaglike_git_ref():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app", "git_repo": "https://github.com/o/r.git",
+                                     "git_ref": "--upload-pack=/tmp/x"})
+    assert r.status_code == 422
+
 def test_root_serves_ui():
     client = TestClient(main.app)
     r = client.get("/")

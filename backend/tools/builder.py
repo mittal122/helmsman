@@ -21,6 +21,12 @@ BUILD_TIMEOUT_S = 900
 LOAD_TIMEOUT_S = 300
 # https://host/path(.git) or git@host:path(.git) — no spaces, no shell metacharacters
 _GIT_URL = re.compile(r"^(https://|git@)[A-Za-z0-9._~:/@%+-]+$")
+# branch / commit / tag — safe git ref chars, NO leading '-' (else it's argv flag injection
+# into `git fetch`/`git checkout`, which pass the ref as a bare positional argument)
+_GIT_REF = re.compile(r"^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,199}$")
+
+def valid_ref(v: str) -> bool:
+    return bool(_GIT_REF.match(v or ""))
 
 def valid_url(url: str) -> bool:
     return bool(_GIT_URL.match(url or ""))
@@ -44,6 +50,11 @@ def clone(repo_url: str, branch: str = "", ref: str = "") -> tuple[str, str]:
     """Shallow-clone the repo; return (workdir, short_commit_sha)."""
     if not _GIT_URL.match(repo_url or ""):
         raise ValueError("invalid git repo URL (must be https://… or git@…)")
+    # branch/ref become bare positional argv to git — a leading '-' would be read as a flag
+    if branch and not valid_ref(branch):
+        raise ValueError("invalid branch name")
+    if ref and not valid_ref(ref):
+        raise ValueError("invalid git ref")
     workdir = tempfile.mkdtemp(prefix="helmsman-src-")
     args = ["git", "clone", "--depth", "1"]
     if branch:

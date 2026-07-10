@@ -48,6 +48,19 @@ def test_make_available_remote_with_registry_pushes(monkeypatch):
     assert builder.make_available("reg.io/app:src-x", "gke_prod") == "registry"
     assert seen["args"] == ["docker", "push", "reg.io/app:src-x"]
 
+def test_valid_ref_blocks_flag_injection():
+    assert builder.valid_ref("main") and builder.valid_ref("feature/x") and builder.valid_ref("v1.2.3")
+    assert builder.valid_ref("a1b2c3d")
+    assert not builder.valid_ref("-x")                     # leading dash = flag
+    assert not builder.valid_ref("--upload-pack=/bin/sh")  # argv flag smuggling
+    assert not builder.valid_ref("a b") and not builder.valid_ref("")
+
+def test_clone_rejects_flaglike_branch_and_ref_before_network():
+    with pytest.raises(ValueError):
+        builder.clone("https://github.com/o/r.git", branch="--upload-pack=x")
+    with pytest.raises(ValueError):
+        builder.clone("https://github.com/o/r.git", ref="-x")
+
 def test_clone_rejects_bad_url_before_network():
     with pytest.raises(ValueError):
         builder.clone("not a url")
