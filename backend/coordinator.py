@@ -6,6 +6,7 @@ from tools import manifests, validate, deploy, monitor, rollback, scan, cost, po
 import remediation
 import diagnostics
 import kubeconfig_store
+import store
 from breakers import Breaker
 from approvals import Approvals
 from monitors import Monitors
@@ -33,6 +34,7 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                    message=guardrails.redact(message, variants),
                    data=guardrails.redact(data or {}, variants))
         await bus.publish(ev)
+        await store.append_event(ev.to_dict())   # durable history (best-effort, redacted)
 
     explained: set = set()
 

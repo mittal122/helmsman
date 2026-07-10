@@ -20,7 +20,22 @@ a decision, update the spec in the same change.
 ## Current status (update this section as work progresses)
 
 - **Phases 0–5 COMPLETE + post-v1 productization in progress.** On `main`,
-  https://github.com/mittal122/helmsman (public). Backend suite 124/124.
+  https://github.com/mittal122/helmsman (public). Backend suite 134/134.
+- **Production Foundation (Tier 1) DONE:** `store.py` — durable Postgres event store +
+  audit log (async, graceful in-memory fallback when `DATABASE_URL` unset; every write
+  best-effort so a store outage never breaks a deploy). Coordinator `emit` persists
+  every (redacted) event; mutating API actions (deploy/scale/stop/restart/autoscale/
+  delete/rollback) write an audit record. `/healthz` + `/readyz` (unauth, for probes/
+  LB), `/history` + `/audit` (token-gated). FastAPI `lifespan` (init store + reaper;
+  shutdown stops all port-forwards + closes pool). JSON structured logging. Packaging:
+  `Dockerfile` (multi-stage, bundles kubectl/helm/kubeconform/kube-score/trivy, non-root,
+  HEALTHCHECK), `docker-compose.yml` (app + postgres, one-command self-host),
+  `.github/workflows/ci.yml` (pytest + docker build), `LICENSE` (MIT), `README.md`.
+- **Tier 2 (remaining for multi-tenant SaaS sale):** per-user RBAC + enforced kubeconfig
+  isolation (encrypted store already built — wire it into the mgmt console), horizontal
+  scale/HA (move global state to Postgres/Redis, per-request kubeconfig, job runner for
+  deploys), TLS + rate-limit + pen-test, cloud-cluster E2E, KEDA/VPA. Ratings: personal
+  8/10, gift ~7/10 (README+LICENSE now present), commercial ~5/10 (was 3.5 — Tier 1 lifted it).
 - **Post-v1: TWO SURFACES.** (1) **Deploy console** (`/`, `static/index.html`) — the
   live SSE rollout of a NEW deploy (mockup dashboard: stepper, command/error console,
   files/health/resources/endpoint panels, clickable auto-port-forward URL, error

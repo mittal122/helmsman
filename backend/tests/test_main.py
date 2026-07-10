@@ -17,6 +17,12 @@ def test_root_serves_ui():
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
 
+def test_health_endpoints():
+    with TestClient(main.app) as client:   # context manager runs startup -> store.init()
+        assert client.get("/healthz").json() == {"status": "ok"}
+        r = client.get("/readyz")
+        assert r.status_code == 200 and r.json()["ready"] is True
+
 def test_rejects_non_rfc1123_name():
     client = TestClient(main.app)
     r = client.post("/deploy", json={"name": "--evil", "image": "i:1"})

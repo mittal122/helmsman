@@ -1,0 +1,36 @@
+# One-command self-host: Helmsman + Postgres (durable event store + audit log).
+#   AUTH_TOKEN=... KUBECONFIG_ENC_KEY=$(python -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())') \
+#   docker compose up --build
+# Then open http://localhost:8000  (mounts your kubeconfig read-only so it can reach your cluster).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: helmsman
+      POSTGRES_PASSWORD: helmsman
+      POSTGRES_DB: helmsman
+    volumes:
+      - helmsman-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helmsman"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://helmsman:helmsman@db:5432/helmsman
+      AUTH_TOKEN: ${AUTH_TOKEN:-}                     # set to require a Bearer token
+      KUBECONFIG_ENC_KEY: ${KUBECONFIG_ENC_KEY:-}     # Fernet key to enable the encrypted kubeconfig store
+      KUBECONFIG: /home/appuser/.kube/config
+    volumes:
+      - ${KUBECONFIG:-~/.kube/config}:/home/appuser/.kube/config:ro
+    ports:
+      - "8000:8000"
+
+volumes:
+  helmsman-db:

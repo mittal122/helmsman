@@ -15,11 +15,38 @@ from monitors import Monitors
 from agents import onboarding, config_advisor
 from tools import rollback, cluster, portforward
 from breakers import Breaker
+import logging
+import store
 
 FORWARD_TTL_S = 30          # a forward not heartbeated within this is reaped
 FORWARD_REAP_INTERVAL_S = 10
 
-app = FastAPI(title="Helmsman")
+logging.basicConfig(level=logging.INFO,
+                    format='{"level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}')
+log = logging.getLogger("helmsman")
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(_app):
+    backend = await store.init()
+    log.info(f"store backend: {backend}")
+    async def reaper():
+        while True:
+            await asyncio.sleep(FORWARD_REAP_INTERVAL_S)
+            try:
+                await asyncio.to_thread(portforward.reap, FORWARD_TTL_S)
+            except Exception:
+                pass
+    task = asyncio.create_task(reaper())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.to_thread(portforward.stop_all)   # never orphan a port-forward
+        await store.close()
+
+app = FastAPI(title="Helmsman", version="1.0", lifespan=lifespan)
 bus = EventBus()
 approvals = Approvals()
 monitors = Monitors()
@@ -105,6 +132,8 @@ async def deploy(req: DeployRequest):
     task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+    await store.append_audit("operator", "deploy", f"{req.namespace}/{req.name}", True,
+                             f"image={req.image} mode={req.mode}")
     return {"deployment_id": req.name}
 
 @app.post("/rollback", dependencies=[Depends(auth.require_token)])
@@ -122,6 +151,8 @@ async def rollback_endpoint(req: RollbackRequest):
     await bus.publish(Event(type="remediation", stage="Rollback",
                             message=f"Rolled back {req.name} to revision {req.revision}",
                             data={"revision": req.revision}))
+    await store.append_audit("operator", "rollback", f"{req.namespace}/{req.name}", True,
+                             f"revision={req.revision}")
     return {"ok": True}
 
 @app.post("/approve", dependencies=[Depends(auth.require_token)])
@@ -220,32 +251,51 @@ async def forwards_stop(req: KeysRequest):
         await asyncio.to_thread(portforward.stop, k)
     return {"ok": True}
 
-@app.on_event("startup")
-async def _start_forward_reaper():
-    async def loop():
-        while True:
-            await asyncio.sleep(FORWARD_REAP_INTERVAL_S)
-            try:
-                await asyncio.to_thread(portforward.reap, FORWARD_TTL_S)
-            except Exception:
-                pass
-    asyncio.create_task(loop())
+# ---------- health (unauthenticated — for k8s probes / load balancers) ----------
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+@app.get("/readyz")
+async def readyz():
+    ok = await store.healthy()
+    if not ok:
+        raise HTTPException(status_code=503, detail="store not ready")
+    return {"ready": True, "store": store.backend_name()}
+
+# ---------- durable history + audit trail (token-gated) ----------
+@app.get("/history", dependencies=_TG)
+async def history(limit: int = 200):
+    return {"events": await store.recent_events(min(max(limit, 1), 2000))}
+
+@app.get("/audit", dependencies=_TG)
+async def audit_log(limit: int = 200):
+    return {"audit": await store.recent_audit(min(max(limit, 1), 2000))}
 
 @app.post("/namespaces/{ns}/workloads/{name}/scale", dependencies=_TG)
 async def workload_scale(ns: str, name: str, req: ScaleRequest):
-    return await _cluster(cluster.scale, ns, name, req.replicas)
+    r = await _cluster(cluster.scale, ns, name, req.replicas)
+    await store.append_audit("operator", "scale", f"{ns}/{name}", True, f"replicas={req.replicas}")
+    return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/stop", dependencies=_TG)
 async def workload_stop(ns: str, name: str):
-    return await _cluster(cluster.stop, ns, name)
+    r = await _cluster(cluster.stop, ns, name)
+    await store.append_audit("operator", "stop", f"{ns}/{name}", True)
+    return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/restart", dependencies=_TG)
 async def workload_restart(ns: str, name: str):
-    return await _cluster(cluster.restart, ns, name)
+    r = await _cluster(cluster.restart, ns, name)
+    await store.append_audit("operator", "restart", f"{ns}/{name}", True)
+    return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/autoscale", dependencies=_TG)
 async def workload_autoscale(ns: str, name: str, req: AutoscaleRequest):
-    return await _cluster(cluster.set_autoscale, ns, name, req.min, req.max, req.cpu)
+    r = await _cluster(cluster.set_autoscale, ns, name, req.min, req.max, req.cpu)
+    await store.append_audit("operator", "autoscale", f"{ns}/{name}", True,
+                             f"min={req.min} max={req.max} cpu={req.cpu}")
+    return r
 
 @app.post("/namespaces/{ns}/workloads/{name}/autoscale/disable", dependencies=_TG)
 async def workload_autoscale_off(ns: str, name: str):
@@ -257,7 +307,9 @@ async def workload_delete(ns: str, name: str, confirm: str = ""):
     if confirm != name:
         raise HTTPException(status_code=400,
                             detail="confirmation required: pass ?confirm=<workload name>")
-    return await _cluster(cluster.delete_app, ns, name)
+    r = await _cluster(cluster.delete_app, ns, name)
+    await store.append_audit("operator", "delete", f"{ns}/{name}", True, str(r.get("method", "")))
+    return r
 
 @app.get("/manage")
 async def manage():
