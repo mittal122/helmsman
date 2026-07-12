@@ -72,3 +72,27 @@ def test_build_missing_dockerfile_raises(tmp_path):
 def test_build_rejects_path_traversal(tmp_path):
     with pytest.raises(ValueError):
         builder.build(str(tmp_path), "app:1", "../etc/Dockerfile")
+
+def _touch(p):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("FROM scratch\n")
+
+def test_list_dockerfiles_detects_and_sorts(tmp_path):
+    _touch(tmp_path / "Dockerfile")
+    _touch(tmp_path / "Dockerfile.prod")
+    _touch(tmp_path / "api" / "Dockerfile")
+    _touch(tmp_path / "docker" / "web.Dockerfile")
+    _touch(tmp_path / ".git" / "Dockerfile")            # ignored dir
+    _touch(tmp_path / "node_modules" / "x" / "Dockerfile")  # ignored dir
+    _touch(tmp_path / "README.md")                       # not a dockerfile
+    got = builder.list_dockerfiles(str(tmp_path))
+    assert got == ["Dockerfile", "Dockerfile.prod", "api/Dockerfile", "docker/web.Dockerfile"]
+
+def test_list_dockerfiles_respects_depth_cap(tmp_path):
+    _touch(tmp_path / "a" / "b" / "c" / "d" / "e" / "Dockerfile")   # depth 5 > cap 4
+    assert builder.list_dockerfiles(str(tmp_path), max_depth=4) == []
+
+def test_list_dockerfiles_caps_count(tmp_path):
+    for i in range(60):
+        _touch(tmp_path / f"svc{i}" / "Dockerfile")
+    assert len(builder.list_dockerfiles(str(tmp_path), max_files=50)) == 50

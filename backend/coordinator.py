@@ -152,11 +152,30 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
             await emit("stage_enter", "Build", "Building image from source")
             try:
                 repo, branch = cfg["git_repo"], cfg.get("git_branch", "")
-                ref, dockerfile = cfg.get("git_ref", ""), cfg.get("dockerfile") or "Dockerfile"
+                ref, dockerfile = cfg.get("git_ref", ""), cfg.get("dockerfile") or ""
                 safe = builder.display_url(repo)
                 await emit("command", "Build",
                            f"git clone --depth 1 {('-b ' + branch + ' ') if branch else ''}{safe}")
                 workdir, sha = await asyncio.to_thread(builder.clone, repo, branch, ref)
+                # no explicit Dockerfile -> detect one in the repo (non-standard names/locations)
+                if not dockerfile:
+                    found = await asyncio.to_thread(builder.list_dockerfiles, workdir)
+                    if "Dockerfile" in found:
+                        dockerfile = "Dockerfile"
+                    elif len(found) == 1:
+                        dockerfile = found[0]
+                        await emit("info", "Build", f"Auto-detected Dockerfile: {dockerfile}")
+                    elif not found:
+                        await emit("error", "Build", "No Dockerfile found in the repository")
+                        await guide("Build", ["Dockerfile not found anywhere in the repository"])
+                        return
+                    else:
+                        listing = ", ".join(found)
+                        await emit("error", "Build",
+                                   f"Multiple Dockerfiles found — pick one and re-deploy: {listing}",
+                                   {"dockerfiles": found})
+                        await guide("Build", [f"multiple Dockerfiles found: {listing}"])
+                        return
                 tag = builder.image_tag(name, sha)
                 await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} .")
                 await asyncio.to_thread(builder.build, workdir, tag, dockerfile)

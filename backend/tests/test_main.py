@@ -124,6 +124,30 @@ def test_deploy_rejects_flaglike_git_ref():
                                      "git_ref": "--upload-pack=/tmp/x"})
     assert r.status_code == 422
 
+def test_repo_dockerfiles_lists(monkeypatch):
+    monkeypatch.setattr(main.builder, "clone", lambda repo, br, ref: ("/tmp/wd", "abc123"))
+    monkeypatch.setattr(main.builder, "list_dockerfiles",
+                        lambda wd: ["Dockerfile", "api/Dockerfile"])
+    monkeypatch.setattr(main.builder, "cleanup", lambda wd: None)
+    client = TestClient(main.app)
+    r = client.post("/repo/dockerfiles", json={"git_repo": "https://github.com/o/r.git"})
+    assert r.status_code == 200
+    assert r.json() == {"dockerfiles": ["Dockerfile", "api/Dockerfile"], "sha": "abc123"}
+
+def test_repo_dockerfiles_rejects_bad_url():
+    client = TestClient(main.app)
+    r = client.post("/repo/dockerfiles", json={"git_repo": "not a url"})
+    assert r.status_code == 422
+
+def test_repo_dockerfiles_requires_operator(monkeypatch):
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with TestClient(main.app) as c:
+        _admin_and(c, ("v@x.com", "viewer"))
+        h = {"Authorization": "Bearer " + c.post("/auth/login",
+             json={"email": "v@x.com", "password": "password1"}).json()["token"]}
+        assert c.post("/repo/dockerfiles", json={"git_repo": "https://github.com/o/r.git"},
+                      headers=h).status_code == 403
+
 def test_root_serves_ui():
     client = TestClient(main.app)
     r = client.get("/")

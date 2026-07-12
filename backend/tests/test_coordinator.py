@@ -635,6 +635,52 @@ async def test_git_repo_triggers_build_and_flows_tag_into_pipeline(monkeypatch):
     assert "endpoint" in [e.type for e in events]
 
 @pytest.mark.asyncio
+async def test_build_autodetects_sole_nonstandard_dockerfile(monkeypatch):
+    # no dockerfile given, no root Dockerfile, exactly one match -> auto-use it
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: ("/tmp/wd", "sha1"))
+    monkeypatch.setattr(coordinator.builder, "list_dockerfiles", lambda wd: ["Dockerfile.prod"])
+    monkeypatch.setattr(coordinator.builder, "image_tag", lambda name, sha: f"{name}:src-{sha}")
+    monkeypatch.setattr(coordinator.builder, "current_context", lambda: "kind-helmsman")
+    monkeypatch.setattr(coordinator.builder, "make_available", lambda tag, ctx: "kind")
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: None)
+    used = {}
+    monkeypatch.setattr(coordinator.builder, "build", lambda wd, tag, df: used.__setitem__("df", df))
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git", dockerfile=""),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    assert used["df"] == "Dockerfile.prod"
+    assert any(e.type == "info" and "Auto-detected" in e.message for e in events)
+    assert "endpoint" in [e.type for e in events]
+
+@pytest.mark.asyncio
+async def test_build_multiple_dockerfiles_stops_with_list(monkeypatch):
+    # no dockerfile given, several matches, no root -> stop and list them, never build/deploy
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: ("/tmp/wd", "sha1"))
+    monkeypatch.setattr(coordinator.builder, "list_dockerfiles",
+                        lambda wd: ["api/Dockerfile", "web/Dockerfile"])
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: None)
+    built = {"c": False}; installed = {"c": False}
+    monkeypatch.setattr(coordinator.builder, "build", lambda *a: built.__setitem__("c", True))
+    monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: installed.__setitem__("c", True))
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git", dockerfile=""),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    assert built["c"] is False and installed["c"] is False
+    err = next(e for e in events if e.type == "error")
+    assert err.stage == "Build" and "Multiple Dockerfiles" in err.message
+    assert err.data["dockerfiles"] == ["api/Dockerfile", "web/Dockerfile"]
+
+@pytest.mark.asyncio
 async def test_build_failure_stops_before_deploy_with_guidance(monkeypatch):
     _stub_tools(monkeypatch)
     monkeypatch.setattr(coordinator.builder, "clone", lambda *a: ("/tmp/wd", "sha"))

@@ -89,7 +89,7 @@ class DeployRequest(BaseModel):
     git_repo: str = ""     # deploy-from-source: clone + build this repo's Dockerfile
     git_branch: str = ""
     git_ref: str = ""      # commit sha / tag (optional)
-    dockerfile: str = "Dockerfile"
+    dockerfile: str = ""   # "" = auto-detect in the repo (root Dockerfile / sole match / else list)
 
     @field_validator("name", "namespace")
     @classmethod
@@ -121,6 +121,25 @@ class DeployRequest(BaseModel):
         if not self.image and not self.git_repo:
             raise ValueError("provide either 'image' or 'git_repo'")
         return self
+
+class DockerfilesRequest(BaseModel):
+    git_repo: str
+    git_branch: str = ""
+    git_ref: str = ""
+
+    @field_validator("git_repo")
+    @classmethod
+    def _valid_repo(cls, v):
+        if not builder.valid_url(v):
+            raise ValueError("invalid git repo URL (must be https://… or git@…)")
+        return v
+
+    @field_validator("git_branch", "git_ref")
+    @classmethod
+    def _valid_ref(cls, v):
+        if v and not builder.valid_ref(v):
+            raise ValueError("invalid git ref (safe chars only, no leading '-')")
+        return v
 
 class ApproveRequest(BaseModel):
     name: str
@@ -170,6 +189,28 @@ async def deploy(req: DeployRequest):
     await store.append_audit(auth.actor(), "deploy", f"{req.namespace}/{req.name}", True,
                              f"{src} mode={req.mode}")
     return {"deployment_id": req.name}
+
+@app.post("/repo/dockerfiles", dependencies=[Depends(auth.require_token)])
+async def repo_dockerfiles(req: DockerfilesRequest):
+    """Clone (shallow, no build → runs no repo code) and list Dockerfiles so the UI can
+    let the user pick one when the name/location isn't the default ./Dockerfile."""
+    def _list():
+        workdir = None
+        try:
+            workdir, sha = builder.clone(req.git_repo, req.git_branch, req.git_ref)
+            return builder.list_dockerfiles(workdir), sha
+        finally:
+            if workdir:
+                builder.cleanup(workdir)
+    try:
+        files, sha = await asyncio.to_thread(_list)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="git clone timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"clone failed: {e}")
+    return {"dockerfiles": files, "sha": sha}
 
 @app.post("/rollback", dependencies=[Depends(auth.require_token)])
 async def rollback_endpoint(req: RollbackRequest):

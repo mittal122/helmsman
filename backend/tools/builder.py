@@ -94,6 +94,31 @@ def cleanup(workdir: str) -> None:
     if workdir and workdir.startswith(tempfile.gettempdir()):
         shutil.rmtree(workdir, ignore_errors=True)
 
+_SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "dist", "build", "__pycache__"}
+
+def _is_dockerfile(fname: str) -> bool:
+    return fname == "Dockerfile" or fname.startswith("Dockerfile.") or fname.endswith(".Dockerfile")
+
+def list_dockerfiles(workdir: str, max_depth: int = 4, max_files: int = 50) -> list[str]:
+    """Find Dockerfiles anywhere in a cloned repo. Returns sorted POSIX-relative paths
+    (root 'Dockerfile' first). Bounded by depth/count so a huge monorepo can't blow up."""
+    found: list[str] = []
+    root = os.path.abspath(workdir)
+    for dirpath, dirnames, filenames in os.walk(root):
+        depth = dirpath[len(root):].count(os.sep)
+        if depth >= max_depth:
+            dirnames[:] = []            # stop descending past the cap
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for f in filenames:
+            if _is_dockerfile(f):
+                found.append(os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/"))
+                if len(found) >= max_files:
+                    break
+        if len(found) >= max_files:
+            break
+    # root "Dockerfile" first, then alphabetical
+    return sorted(found, key=lambda p: (p != "Dockerfile", p))
+
 def image_tag(name: str, sha: str) -> str:
     reg = os.environ.get("REGISTRY", "").rstrip("/")
     base = f"{reg}/{name}" if reg else name

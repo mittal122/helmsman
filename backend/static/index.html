@@ -187,7 +187,9 @@
       <div class="frow">
         <div style="flex:2"><label>Git repo <span style="color:var(--faint);font-weight:400">(build from source — leave Image blank)</span></label><input name="git_repo" placeholder="https://github.com/org/app.git"></div>
         <div><label>Branch</label><input name="git_branch" placeholder="main"></div>
-        <div><label>Dockerfile</label><input name="dockerfile" placeholder="Dockerfile"></div>
+        <div><label>Dockerfile <span style="color:var(--faint);font-weight:400">(blank = auto-detect)</span></label>
+          <span class="mini"><input name="dockerfile" list="dfl" placeholder="auto-detect"><datalist id="dfl"></datalist><button class="btn" id="df-detect" type="button">Detect</button></span>
+          <div id="df-hint" class="mini" style="color:var(--faint)"></div></div>
       </div>
       <div class="fbtns">
         <button class="btn primary" id="deploy-btn">Deploy — show everything</button>
@@ -461,8 +463,23 @@
     fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
       name:val("name"),image:val("image"),namespace:val("namespace"),port:Number(val("port")),
       replicas:Number(val("replicas")),mode:mode,env:kv(val("env")),secrets:kv(val("secrets")),cluster:val("cluster")||"",
-      git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||"Dockerfile"
+      git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||""
     })}).catch(function(){setStatus("error","couldn't reach backend");});
+  };
+  $("df-detect").onclick=function(){
+    var repo=val("git_repo");var hint=$("df-hint");
+    if(!repo){hint.textContent="Enter a Git repo first.";return;}
+    hint.textContent="Detecting…";
+    fetch("/repo/dockerfiles",{method:"POST",headers:authHeaders(),body:JSON.stringify(
+      {git_repo:repo,git_branch:val("git_branch")||""})})
+      .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})
+      .then(function(x){
+        if(!x.ok){hint.textContent="Detect failed: "+(x.d.detail||"error");return;}
+        var files=x.d.dockerfiles||[];var dl=$("dfl");dl.textContent="";
+        files.forEach(function(f){var o=document.createElement("option");o.value=f;dl.appendChild(o);});
+        if(!files.length){hint.textContent="No Dockerfile found in the repo.";}
+        else{hint.textContent="Found "+files.length+": "+files.join(", ")+" — pick one (blank = auto).";}
+      }).catch(function(){hint.textContent="Detect failed: couldn't reach backend.";});
   };
   function resolveApproval(ok){$("approve").classList.remove("on");
     fetch("/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:curName,approved:ok})});
