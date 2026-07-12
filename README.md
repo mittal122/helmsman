@@ -51,6 +51,16 @@ connection. Everything after that is instant. On Linux it may ask for your passw
 > cluster (kind/minikube — no registry needed), and deploys it. For a remote cluster, set
 > `REGISTRY` to a registry it can pull from. Needs Docker on the machine running Helmsman.
 > No Dockerfile yet? Use **"Ask agent: containerize"** to generate one from a description.
+> Non-standard Dockerfile name/location (`Dockerfile.prod`, `api/Dockerfile`)? Leave the
+> **Dockerfile** field blank to auto-detect, or hit **Detect** to list and pick one.
+
+> **Deploy a docker-compose stack:** paste your `docker-compose.yml` into the compose box
+> (under "Deploy a multi-service docker-compose stack"). Helmsman deploys **every service**
+> as its own release in one namespace — so `db:5432` / `redis:6379` in your app keep working
+> via cluster DNS with no rewrite. Databases get TCP/exec health probes (not HTTP), named
+> volumes become PVCs, and secret-looking env vars are redacted. v1 needs pre-built `image:`
+> refs (a `build:`-only service is rejected); custom networks / restart policies are skipped
+> with a warning.
 
 ## Configuration (optional)
 
@@ -66,9 +76,9 @@ All via environment variables — the defaults work for local use:
 
 ## Features
 
-- **Deploy from image or Git** — deploy a pre-built image, or point at a **Git repo** and
-  Helmsman clones it, builds the `Dockerfile`, and loads the image into your local cluster
-  (no registry needed) — then deploys through the same validated pipeline.
+- **Deploy from image, Git, or docker-compose** — a pre-built image; a **Git repo** Helmsman
+  clones + builds (auto-detecting the `Dockerfile`, wherever it lives); or a whole
+  **docker-compose** stack deployed as one release per service, wired by cluster DNS.
 - **Deploy console** — live stream of the real `git`/`docker`/`helm`/`kubectl` commands +
   raw errors (with a copy-able report incl. the exact `file:line`), a staged progress bar,
   generated files, pod health, CPU/mem, and a **clickable auto-port-forward URL**.
@@ -85,7 +95,7 @@ All via environment variables — the defaults work for local use:
 ## Development
 
 ```bash
-cd backend && python -m pytest -q      # 152 tests
+cd backend && python -m pytest -q      # 190 tests
 ```
 
 ## Advanced — other ways to run (only if you already know Docker)

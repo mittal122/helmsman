@@ -13,7 +13,7 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
-from tools import rollback, cluster, portforward, builder
+from tools import rollback, cluster, portforward, builder, compose
 from breakers import Breaker
 import logging
 import store
@@ -90,6 +90,15 @@ class DeployRequest(BaseModel):
     git_branch: str = ""
     git_ref: str = ""      # commit sha / tag (optional)
     dockerfile: str = ""   # "" = auto-detect in the repo (root Dockerfile / sole match / else list)
+    compose: str = ""      # multi-service: raw docker-compose YAML (deploys the whole stack)
+    compose_path: str = "" # or read the compose file at this path inside git_repo
+
+    @field_validator("compose_path")
+    @classmethod
+    def _valid_compose_path(cls, v):
+        if v and (".." in v or v.startswith("/")):
+            raise ValueError("invalid compose_path")
+        return v
 
     @field_validator("name", "namespace")
     @classmethod
@@ -118,8 +127,10 @@ class DeployRequest(BaseModel):
 
     @model_validator(mode="after")
     def _image_or_repo(self):
-        if not self.image and not self.git_repo:
-            raise ValueError("provide either 'image' or 'git_repo'")
+        if self.compose_path and not self.git_repo:
+            raise ValueError("compose_path needs git_repo")
+        if not self.image and not self.git_repo and not self.compose:
+            raise ValueError("provide 'image', 'git_repo', or 'compose'")
         return self
 
 class DockerfilesRequest(BaseModel):
@@ -180,12 +191,45 @@ class KubeconfigRequest(BaseModel):
     @classmethod
     def _valid_name(cls, v): return _dns1123(v)
 
+def _read_compose_from_repo(git_repo, branch, ref, path):
+    workdir = None
+    try:
+        workdir, _ = builder.clone(git_repo, branch, ref)
+        fp = os.path.join(workdir, path or "docker-compose.yml")
+        if not os.path.isfile(fp):
+            raise ValueError(f"compose file not found in repo: {path or 'docker-compose.yml'}")
+        with open(fp) as f:
+            return f.read()
+    finally:
+        if workdir:
+            builder.cleanup(workdir)
+
 @app.post("/deploy", dependencies=[Depends(auth.require_token)])
 async def deploy(req: DeployRequest):
-    task = asyncio.create_task(coordinator_run(req.model_dump(), bus, approvals, monitors, breakers))
+    cfg = req.model_dump()
+    src = f"image={req.image}"
+    # multi-service: parse the compose stack into per-service cfgs before dispatch
+    if req.compose or req.compose_path:
+        text = req.compose
+        if not text:   # read it from the repo
+            try:
+                text = await asyncio.to_thread(_read_compose_from_repo,
+                    req.git_repo, req.git_branch, req.git_ref, req.compose_path)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"could not read compose from repo: {e}")
+        try:
+            services, warnings = compose.parse(text)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"compose parse error: {e}")
+        cfg["services"], cfg["warnings"] = services, warnings
+        src = f"compose={len(services)} services"
+    elif req.git_repo:
+        src = f"git={builder.display_url(req.git_repo)}"
+    task = asyncio.create_task(coordinator_run(cfg, bus, approvals, monitors, breakers))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
-    src = f"git={builder.display_url(req.git_repo)}" if req.git_repo else f"image={req.image}"
     await store.append_audit(auth.actor(), "deploy", f"{req.namespace}/{req.name}", True,
                              f"{src} mode={req.mode}")
     return {"deployment_id": req.name}

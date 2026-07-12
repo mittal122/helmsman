@@ -113,6 +113,34 @@ def test_deploy_requires_image_or_git_repo():
     client = TestClient(main.app)
     assert client.post("/deploy", json={"name": "app"}).status_code == 422
 
+def test_deploy_compose_parses_services(monkeypatch):
+    captured = {}
+    async def fake_run(cfg, bus, approvals, monitors, breakers):
+        captured["cfg"] = cfg
+    monkeypatch.setattr(main, "coordinator_run", fake_run)
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "stack", "compose":
+        "services:\n  web:\n    image: nginx:1\n    ports: ['80']\n  db:\n    image: postgres:16\n"})
+    assert r.status_code == 200
+    names = [s["name"] for s in captured["cfg"]["services"]]
+    assert set(names) == {"web", "db"}
+
+def test_deploy_rejects_malformed_compose():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "stack", "compose": "services: [not: valid"})
+    assert r.status_code == 422
+
+def test_deploy_rejects_build_only_compose():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "stack",
+                    "compose": "services:\n  api:\n    build: ./api\n"})
+    assert r.status_code == 422
+
+def test_deploy_compose_path_needs_git_repo():
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "stack", "compose_path": "docker-compose.yml"})
+    assert r.status_code == 422
+
 def test_deploy_rejects_bad_git_url():
     client = TestClient(main.app)
     r = client.post("/deploy", json={"name": "app", "git_repo": "ftp://x/y; rm -rf /"})

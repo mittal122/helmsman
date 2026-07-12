@@ -20,14 +20,37 @@ spec:
         {{- include "app.labels" . | nindent 8 }}
     spec:
       securityContext:
+        {{- if .Values.runAsNonRoot }}
         runAsNonRoot: true
+        {{- end }}
+        {{- with .Values.runAsUser }}
+        runAsUser: {{ . }}
+        {{- end }}
+        {{- with .Values.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: {{ .Values.name }}
           image: {{ .Values.image | quote }}
+          {{- with .Values.command }}
+          command:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.args }}
+          args:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.port }}
+            {{- range .Values.extraPorts }}
+            - containerPort: {{ . }}
+            {{- end }}
           envFrom:
 {{- if .Values.env }}
             - configMapRef:
@@ -44,32 +67,40 @@ spec:
             limits:
               cpu: {{ .Values.resources.limits.cpu | quote }}
               memory: {{ .Values.resources.limits.memory | quote }}
+          {{- $ptype := (.Values.probe | default dict).type | default "http" }}
+          {{- if ne $ptype "none" }}
           livenessProbe:
-            httpGet:
-              path: {{ .Values.probePath | quote }}
-              port: {{ .Values.port }}
+            {{- include "app.probeHandler" . | nindent 12 }}
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: {{ .Values.probePath | quote }}
-              port: {{ .Values.port }}
+            {{- include "app.probeHandler" . | nindent 12 }}
             initialDelaySeconds: 3
             periodSeconds: 5
           startupProbe:
-            httpGet:
-              path: {{ .Values.probePath | quote }}
-              port: {{ .Values.port }}
+            {{- include "app.probeHandler" . | nindent 12 }}
             failureThreshold: 30
             periodSeconds: 2
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            readOnlyRootFilesystem: {{ not .Values.writableRoot }}
+            {{- if .Values.dropCapabilities }}
             capabilities:
               drop: ["ALL"]
+            {{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- range .Values.volumes }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- range .Values.volumes }}
+        - name: {{ .name }}
+          persistentVolumeClaim:
+            claimName: {{ $.Values.name }}-{{ .name }}
+        {{- end }}

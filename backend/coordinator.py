@@ -19,6 +19,8 @@ MONITOR_INTERVAL_S = 5
 MONITOR_MAX_CYCLES = 720   # safety cap (~1h at 5s); real stop is the Monitors flag
 
 async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors, breakers: Breaker) -> None:
+    if cfg.get("services"):
+        return await _run_compose(cfg, bus, approvals, monitors, breakers)
     name, ns = cfg["name"], cfg.get("namespace", "default")
     port = int(cfg.get("port", 8080))
     mode = cfg.get("mode", "manual")
@@ -348,6 +350,200 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                        {"kind": "internal", "command": _ctx["cmd"],
                         "stderr": stderr, "traceback": tb})
             await guide(current, [f"internal error: {e}"])
+        except Exception:
+            pass
+    finally:
+        if kubeconfig_tmp:
+            if prev_kubeconfig is not None:
+                os.environ["KUBECONFIG"] = prev_kubeconfig
+            else:
+                os.environ.pop("KUBECONFIG", None)
+            try:
+                os.unlink(kubeconfig_tmp)
+            except OSError:
+                pass
+
+
+async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
+                       monitors: Monitors, breakers: Breaker) -> None:
+    """Deploy a docker-compose stack: N services, one namespace, one Helm release each.
+    Shared Detect + Approve + Monitor; per-service Generate/Validate/Scan/Deploy/Verify.
+    Service-to-service DNS is free (each K8s Service is named after its compose service)."""
+    stack, ns = cfg["name"], cfg.get("namespace", "default")
+    mode = cfg.get("mode", "manual")
+    services = cfg["services"]
+    warnings = cfg.get("warnings") or []
+    # redact EVERY service's secrets everywhere (union) — a secret from one service must
+    # never leak in another's stream either.
+    all_secrets = {}
+    for s in services:
+        all_secrets.update(s.get("secrets") or {})
+    variants = guardrails.secret_variants(all_secrets)
+    _ctx = {"cmd": ""}
+
+    async def emit(type_, stage, message, data=None):
+        if type_ == "command":
+            _ctx["cmd"] = message
+        ev = Event(type=type_, stage=stage,
+                   message=guardrails.redact(message, variants),
+                   data=guardrails.redact(data or {}, variants))
+        await bus.publish(ev)
+        await store.append_event(ev.to_dict())
+
+    async def guide(stage, issues):
+        g = diagnostics.diagnose(stage, issues, {"name": stack, "image": "", "namespace": ns})
+        await emit("guidance", stage, g["summary"], g)
+
+    monitors.stop_all()
+    await asyncio.to_thread(portforward.stop_all)
+
+    kubeconfig_tmp = None
+    prev_kubeconfig = os.environ.get("KUBECONFIG")
+    try:
+        cluster = cfg.get("cluster") or ""
+        if cluster:
+            kubeconfig_tmp = await asyncio.to_thread(kubeconfig_store.decrypt_to_tempfile, cluster)
+            os.environ["KUBECONFIG"] = kubeconfig_tmp
+
+        # Detect (once)
+        await emit("stage_enter", "Detect", f"Deploying compose stack '{stack}' ({len(services)} services)")
+        for svc in services:
+            await emit("info", "Detect", f"• {svc['name']} → {svc['image']}"
+                       + (f" (:{svc['port']})" if svc.get("published") else ""))
+        for w in warnings:
+            await emit("info", "Detect", f"⚠ {w}")
+        reachable, detail = await asyncio.to_thread(deploy.cluster_reachable)
+        if not reachable:
+            target = ("cluster '" + cluster + "'") if cluster else "the local cluster"
+            await emit("error", "Detect", f"Can't reach {target}: {detail}.")
+            await guide("Detect", [f"connection to {target} failed: {detail}"])
+            return
+        await emit("info", "Detect", f"Cluster reachable ({detail})")
+        await emit("stage_exit", "Detect", "Ready")
+
+        # Approve (once, whole stack)
+        if mode == "manual":
+            fut = approvals.create(stack)
+            await emit("approval_required", "Approve",
+                       f"Approve deploying {len(services)} services to {ns}?",
+                       {"name": stack, "namespace": ns,
+                        "services": [s["name"] for s in services]})
+            if not await fut:
+                await emit("rejected", "Approve", "Stack deployment rejected by user")
+                return
+            await emit("stage_exit", "Approve", "Approved")
+        else:
+            await emit("info", "Approve", "Autonomous mode — auto-approved")
+
+        # Per service: Generate → Validate → Scan → Deploy (in depends_on order)
+        for svc in services:
+            sn = svc["name"]
+            scfg = {**svc, "namespace": ns, "cluster": cluster, "stack": stack}
+            st = lambda s: f"{sn}:{s}"
+            await emit("stage_enter", st("Generate"), f"Rendering {sn}")
+            rendered = await asyncio.to_thread(manifests.render, scfg)
+            await emit("manifest", st("Generate"), f"Rendered {sn}", {"yaml": rendered})
+            await emit("stage_exit", st("Generate"), "Manifests ready")
+
+            await emit("stage_enter", st("Validate"), f"Validating {sn}")
+            ok, issues = await asyncio.to_thread(validate.validate, rendered, ns)
+            if not ok:
+                await emit("error", st("Validate"), f"Validation failed for {sn}", {"issues": issues})
+                await guide(st("Validate"), issues)
+                return
+            await emit("stage_exit", st("Validate"), "Valid")
+
+            await emit("stage_enter", st("Scan"), f"Scanning {sn}")
+            img_scan = await asyncio.to_thread(scan.scan_image, svc["image"])
+            await emit("scan", st("Scan"), img_scan["summary"], {"image": img_scan})
+            if img_scan["available"] and not img_scan["ok"]:
+                await emit("error", st("Scan"), f"Image scan gate failed for {sn}: {img_scan['summary']}",
+                           {"findings": img_scan["findings"]})
+                await guide(st("Scan"), [img_scan["summary"]])
+                return
+            await emit("stage_exit", st("Scan"), "Scanned")
+
+            await emit("stage_enter", st("Deploy"), f"Applying {sn}")
+            await emit("command", st("Deploy"),
+                       f"helm upgrade --install {sn} ./chart -n {ns} --create-namespace")
+            try:
+                await asyncio.to_thread(deploy.install, scfg)
+            except Exception as e:
+                await emit("error", st("Deploy"), f"Deploy of {sn} failed: {e}")
+                await guide(st("Deploy"), [f"helm install failed for {sn}: {e}"])
+                return
+            await emit("stage_exit", st("Deploy"), "Applied")
+
+        # Verify all rollouts (shared timeout budget)
+        await emit("stage_enter", "Verify", "Waiting for all services to become ready")
+        pending = {s["name"] for s in services}
+        last = {}
+        for _ in range(ROLLOUT_TIMEOUT_S // max(POLL_INTERVAL_S, 1)):
+            for sn in list(pending):
+                ready, desired = await asyncio.to_thread(deploy.get_replicas, sn, ns)
+                if (ready, desired) != last.get(sn):
+                    await emit("rollout", "Verify", f"{sn}: {ready}/{desired} ready",
+                               {"service": sn, "ready": ready, "desired": desired})
+                    last[sn] = (ready, desired)
+                if desired and ready >= desired:
+                    pending.discard(sn)
+            if not pending:
+                break
+            await asyncio.sleep(POLL_INTERVAL_S)
+        if pending:
+            failures = []
+            for sn in pending:
+                failures += await asyncio.to_thread(monitor.detect_failures, sn, ns)
+            await emit("error", "Verify", f"Services not ready in time: {', '.join(sorted(pending))}",
+                       {"pending": sorted(pending), "failures": failures})
+            await guide("Verify", [f"{f['type']} on {f['pod']}: {f.get('message','')}" for f in failures]
+                        or [f"services {', '.join(sorted(pending))} never reached ready"])
+            return
+
+        # Port-forward each browser-facing service; emit an endpoint per forward
+        for svc in services:
+            if not svc.get("published"):
+                continue
+            sn, sport = svc["name"], int(svc["port"])
+            ep = await asyncio.to_thread(deploy.get_endpoint, sn, ns, sport)
+            try:
+                lport = await asyncio.to_thread(portforward.start, sn, ns, f"svc/{sn}", sport)
+                ep["url"] = f"http://127.0.0.1:{lport}"
+            except Exception:
+                pass
+            ep["service_name"] = sn
+            await emit("endpoint", "Verify", f"{sn} is live", ep)
+        await emit("stage_exit", "Verify", "All services ready")
+
+        # Monitor (once, all services)
+        await emit("stage_enter", "Monitor", "Monitoring the stack")
+        monitors.start(stack)
+        prev_fail: set = set()
+        for _ in range(MONITOR_MAX_CYCLES):
+            if monitors.is_stopped(stack):
+                break
+            snapshot = {}
+            fails_now: set = set()
+            for svc in services:
+                sn = svc["name"]
+                failures = await asyncio.to_thread(monitor.detect_failures, sn, ns)
+                metrics = await asyncio.to_thread(monitor.get_metrics, sn, ns)
+                snapshot[sn] = {"failures": failures, "metrics": metrics}
+                for f in failures:
+                    fails_now.add((sn, f["pod"], f["type"]))
+            await emit("health", "Monitor", "Stack health snapshot", {"services": snapshot})
+            for key in fails_now - prev_fail:
+                await emit("failure", "Monitor", f"{key[2]} on {key[1]} ({key[0]})",
+                           {"service": key[0], "pod": key[1], "type": key[2]})
+            prev_fail = fails_now
+            await asyncio.sleep(MONITOR_INTERVAL_S)
+        await emit("stage_exit", "Monitor", "Monitoring stopped")
+    except Exception as e:
+        try:
+            tb = traceback.format_exc()
+            await emit("error", "Deploy", f"Unexpected error: {e}",
+                       {"kind": "internal", "command": _ctx["cmd"], "traceback": tb})
+            await guide("Deploy", [f"internal error: {e}"])
         except Exception:
             pass
     finally:

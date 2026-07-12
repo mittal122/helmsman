@@ -3,6 +3,21 @@ image: mendhak/http-https-echo:31
 port: 8080
 replicas: 2
 probePath: /
+# multi-service (compose) extras — all optional, defaults keep single-service renders identical
+command: []          # container command (compose entrypoint)
+args: []             # container args (compose command)
+extraPorts: []       # additional container/service ports
+runAsUser: null      # securityContext.runAsUser (e.g. postgres 999); null = image default
+runAsNonRoot: true   # false lets a stateful image (postgres/mysql) start as root then drop privs
+fsGroup: null        # pod fsGroup so a mounted PVC is writable by the service's uid
+writableRoot: false  # true drops readOnlyRootFilesystem (stateful third-party images)
+dropCapabilities: true  # false keeps default caps so a stateful image's entrypoint can chown/setuid
+volumes: []          # [{name, mountPath, size}] -> a PVC per entry + mount
+probe:
+  type: http         # http | tcp | exec | none
+  path: ""           # http only; empty = fall back to probePath
+  command: []         # exec only
+stack: ""            # compose stack name -> helmsman.dev/stack label (groups the releases)
 resources:
   requests:
     cpu: 50m

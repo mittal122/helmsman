@@ -634,6 +634,79 @@ async def test_git_repo_triggers_build_and_flows_tag_into_pipeline(monkeypatch):
     assert cleaned["wd"] == "/tmp/wd"               # temp clone cleaned up
     assert "endpoint" in [e.type for e in events]
 
+def _compose_cfg(**over):
+    base = {"name": "shop", "namespace": "default", "mode": "manual", "cluster": "",
+            "warnings": ["custom networks ignored"],
+            "services": [
+                {"name": "db", "image": "postgres:16", "port": 5432, "replicas": 1,
+                 "env": {}, "secrets": {"POSTGRES_PASSWORD": "pw"}, "published": False,
+                 "probe": {"type": "tcp"}, "volumes": [], "run_as_user": 999},
+                {"name": "web", "image": "nginx:1", "port": 80, "replicas": 1,
+                 "env": {}, "secrets": {}, "published": True,
+                 "probe": {"type": "tcp"}, "volumes": [], "run_as_user": None},
+            ]}
+    base.update(over); return base
+
+@pytest.mark.asyncio
+async def test_compose_deploys_each_service_with_one_approval(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    installed = []
+    monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: installed.append(cfg["name"]))
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (1, 1))
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_compose_cfg(mode="autonomous"), bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    events = []
+    while not q.empty():
+        events.append(await q.get())
+    # both services installed, in depends_on order (db before web)
+    assert installed == ["db", "web"]
+    stages = {e.stage for e in events}
+    assert "db:Deploy" in stages and "web:Deploy" in stages
+    # exactly one endpoint (only web is published)
+    eps = [e for e in events if e.type == "endpoint"]
+    assert len(eps) == 1 and eps[0].data["service_name"] == "web"
+    # warnings surfaced
+    assert any("networks" in e.message for e in events if e.type == "info")
+
+@pytest.mark.asyncio
+async def test_compose_one_approval_gate_blocks_all(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    installed = []
+    monkeypatch.setattr(coordinator.deploy, "install", lambda cfg: installed.append(cfg["name"]))
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (1, 1))
+    appr = approvals_mod.Approvals()
+    bus = EventBus(); q = bus.subscribe()
+    task = asyncio.create_task(coordinator.run(_compose_cfg(), bus, appr,
+                               monitors_mod.Monitors(), breakers_mod.Breaker()))
+    await asyncio.sleep(0.05)
+    assert installed == []                     # nothing deployed pending the single gate
+    assert appr.resolve("shop", True) is True  # gate keyed by STACK name
+    await task
+    assert installed == ["db", "web"]
+
+@pytest.mark.asyncio
+async def test_compose_redacts_any_services_secret(monkeypatch):
+    _stub_tools(monkeypatch)
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    monkeypatch.setattr(coordinator.deploy, "get_replicas", lambda n, ns: (1, 1))
+    monkeypatch.setattr(coordinator.manifests, "render",
+                        lambda cfg: "stringData:\n  POSTGRES_PASSWORD: s3cr3tpw")
+    bus = EventBus(); q = bus.subscribe()
+    cfg = _compose_cfg(mode="autonomous")
+    cfg["services"][0]["secrets"] = {"POSTGRES_PASSWORD": "s3cr3tpw"}
+    await coordinator.run(cfg, bus, approvals_mod.Approvals(),
+                          monitors_mod.Monitors(), breakers_mod.Breaker())
+    dumped = ""
+    while not q.empty():
+        dumped += str((await q.get()).to_dict())
+    assert "s3cr3tpw" not in dumped and "••••" in dumped   # any service's secret redacted everywhere
+
 @pytest.mark.asyncio
 async def test_build_autodetects_sole_nonstandard_dockerfile(monkeypatch):
     # no dockerfile given, no root Dockerfile, exactly one match -> auto-use it

@@ -191,6 +191,10 @@
           <span class="mini"><input name="dockerfile" list="dfl" placeholder="auto-detect"><datalist id="dfl"></datalist><button class="btn" id="df-detect" type="button">Detect</button></span>
           <div id="df-hint" class="mini" style="color:var(--faint)"></div></div>
       </div>
+      <details style="margin-top:6px"><summary style="cursor:pointer;color:var(--faint);font-size:.8rem">Deploy a multi-service docker-compose stack</summary>
+        <div style="margin-top:6px"><label>docker-compose.yml <span style="color:var(--faint);font-weight:400">(paste — deploys every service; overrides Image/Git above)</span></label>
+          <textarea name="compose" rows="6" placeholder="services:&#10;  web:&#10;    image: nginx:1.27&#10;    ports: ['8080:80']&#10;  db:&#10;    image: postgres:16&#10;    environment: {POSTGRES_PASSWORD: pw}" style="width:100%;font-family:var(--mono);font-size:.78rem"></textarea></div>
+      </details>
       <div class="fbtns">
         <button class="btn primary" id="deploy-btn">Deploy — show everything</button>
         <span class="mini"><input id="rb-rev" type="number" placeholder="rev#"><button class="btn reject" id="rb-btn">Roll back</button></span>
@@ -401,12 +405,16 @@
       var q=$("approve-q"); q.textContent=""; q.appendChild(el("b",null,"Approval needed. ")); q.appendChild(document.createTextNode(ev.message)); $("approve").classList.add("on"); setStatus("waiting","waiting for your approval"); }
     else if(t==="guidance"){ setStatus("waiting","blocked — fix needed (see console)"); }
     else if(t==="endpoint"){ setStage("Verify","done"); setStatus("live","live & healthy"); var d=ev.data||{};
-      var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); u.textContent="";
-      var lbl=ep.querySelector(".lbl"); if(lbl) lbl.textContent = d.url ? "Open your app" : "Access via port-forward";
-      if(d.url && /^https?:\/\//i.test(d.url)){ liveForwardKey=curName; var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; u.appendChild(a);
-        u.appendChild(el("div","epnote","auto port-forward running — click to open in a new tab")); }
-      else { u.appendChild(document.createTextNode(d.service?d.service+":"+d.port:ev.message)); }
-      if(d.port_forward){ u.appendChild(el("div","epcmd","$ "+d.port_forward)); }
+      var multi=!!d.service_name;   // compose stack: one endpoint event per published service
+      var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); if(!multi) u.textContent="";
+      var lbl=ep.querySelector(".lbl"); if(lbl) lbl.textContent = multi ? "Stack endpoints" : (d.url ? "Open your app" : "Access via port-forward");
+      var box=multi?el("div","eprow"):u;
+      if(multi) box.appendChild(el("span","epsvc",d.service_name+": "));
+      if(d.url && /^https?:\/\//i.test(d.url)){ fwdKeys.push(multi?d.service_name:curName); var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; box.appendChild(a);
+        if(!multi) box.appendChild(el("div","epnote","auto port-forward running — click to open in a new tab")); }
+      else { box.appendChild(document.createTextNode(d.service?d.service+":"+d.port:ev.message)); }
+      if(!multi && d.port_forward){ box.appendChild(el("div","epcmd","$ "+d.port_forward)); }
+      if(multi) u.appendChild(box);
       nowBanner("Deployment","live",""); }
     else if(t==="rollout" && ev.data){ nowBanner("Deploy agent","applying manifests, watching rollout",(ev.data.ready||0)+" / "+(ev.data.desired||0)+" ready"); }
     else if(t==="manifest" && ev.data){ renderFiles(ev.data.yaml); }
@@ -421,7 +429,7 @@
   })();
 
   // ---- actions ----
-  var curName="",curNs="default",mode="manual",liveForwardKey="";
+  var curName="",curNs="default",mode="manual",fwdKeys=[];
   var tokenEl=$("token");tokenEl.value=localStorage.getItem("helmsman_token")||"";
   tokenEl.addEventListener("change",function(){localStorage.setItem("helmsman_token",tokenEl.value);});
   $("settings-btn").onclick=function(){var s=$("settings");s.style.display=s.style.display==="none"?"block":"none";};
@@ -443,17 +451,17 @@
     $("pods").textContent="";$("pods").appendChild(el("div","empty","waiting for pods"));
     $("res").textContent="";$("res").appendChild(el("div","empty","waiting for metrics"));
     $("ep").className="endpoint pending";$("ep-url").textContent="waiting…";
-    $("approve").classList.remove("on");liveForwardKey="";
+    $("approve").classList.remove("on");fwdKeys=[];
   }
   // keepalive: keep the deploy's auto port-forward alive while this window is open;
   // the server reaps it after the TTL once heartbeats stop (window closed).
   setInterval(function(){
-    if(!liveForwardKey)return;
-    fetch("/forwards/heartbeat",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:[liveForwardKey]})}).catch(function(){});
+    if(!fwdKeys.length)return;
+    fetch("/forwards/heartbeat",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:fwdKeys})}).catch(function(){});
   },8000);
   window.addEventListener("pagehide",function(){
-    if(!liveForwardKey)return;
-    try{fetch("/forwards/stop",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:[liveForwardKey]}),keepalive:true});}catch(_){}
+    if(!fwdKeys.length)return;
+    try{fetch("/forwards/stop",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:fwdKeys}),keepalive:true});}catch(_){}
   });
   $("deploy-btn").onclick=function(){
     curName=val("name");curNs=val("namespace")||"default";curReplicas=Number(val("replicas"))||1;
@@ -463,7 +471,8 @@
     fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
       name:val("name"),image:val("image"),namespace:val("namespace"),port:Number(val("port")),
       replicas:Number(val("replicas")),mode:mode,env:kv(val("env")),secrets:kv(val("secrets")),cluster:val("cluster")||"",
-      git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||""
+      git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||"",
+      compose:val("compose")||""
     })}).catch(function(){setStatus("error","couldn't reach backend");});
   };
   $("df-detect").onclick=function(){

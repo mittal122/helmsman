@@ -11,3 +11,11 @@ spec:
   ports:
     - port: {{ .Values.port }}
       targetPort: {{ .Values.port }}
+      {{- if .Values.extraPorts }}
+      name: port-{{ .Values.port }}
+      {{- end }}
+    {{- range .Values.extraPorts }}
+    - port: {{ . }}
+      targetPort: {{ . }}
+      name: port-{{ . }}
+    {{- end }}

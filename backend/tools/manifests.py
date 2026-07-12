@@ -5,9 +5,14 @@ import yaml
 
 CHART_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "chart"))
 
+DEFAULT_RESOURCES = {
+    "requests": {"cpu": "50m", "memory": "64Mi"},
+    "limits": {"cpu": "500m", "memory": "256Mi"},
+}
+
 def build_values(cfg: dict) -> dict:
     replicas = int(cfg.get("replicas", 2))
-    return {
+    values = {
         "name": cfg["name"],
         "image": cfg["image"],
         "port": int(cfg.get("port", 8080)),
@@ -26,6 +31,34 @@ def build_values(cfg: dict) -> dict:
         },
         "pdb": {"enabled": replicas > 1, "minAvailable": 1},
     }
+    # multi-service (compose) extras — only emitted when set, so a single-service render is
+    # byte-identical to before (the chart's own defaults apply when these are absent).
+    if cfg.get("command"):
+        values["command"] = list(cfg["command"])
+    if cfg.get("args"):
+        values["args"] = list(cfg["args"])
+    if cfg.get("extra_ports"):
+        values["extraPorts"] = [int(p) for p in cfg["extra_ports"]]
+    if cfg.get("run_as_user") is not None:
+        values["runAsUser"] = int(cfg["run_as_user"])
+    if cfg.get("volumes"):
+        values["volumes"] = list(cfg["volumes"])
+        values["writableRoot"] = True          # a stateful service needs to write its data dir
+        values["dropCapabilities"] = False     # a stateful image's entrypoint needs CHOWN/SETUID
+        if cfg.get("run_as_user") is not None:
+            values["fsGroup"] = int(cfg["run_as_user"])   # PVC writable by that uid
+        else:
+            values["runAsNonRoot"] = False     # let the stateful image drop privileges itself
+    if cfg.get("probe"):
+        values["probe"] = dict(cfg["probe"])
+    if cfg.get("stack"):
+        values["stack"] = cfg["stack"]
+    if cfg.get("resources"):                    # compose partial -> overlay on chart defaults
+        r = {"requests": dict(DEFAULT_RESOURCES["requests"]), "limits": dict(DEFAULT_RESOURCES["limits"])}
+        r["requests"].update((cfg["resources"].get("requests") or {}))
+        r["limits"].update((cfg["resources"].get("limits") or {}))
+        values["resources"] = r
+    return values
 
 def render(cfg: dict) -> str:
     values = build_values(cfg)
