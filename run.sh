@@ -129,6 +129,26 @@ else say "Installing metrics-server"; scripts/monitoring-up.sh || warn "metrics-
 # unset (auth enforced, Secure cookies) — see README.
 export ALLOW_OPEN_DEV="${ALLOW_OPEN_DEV:-1}"
 export COOKIE_INSECURE="${COOKIE_INSECURE:-1}"
+
+# never fail on "port in use": if $PORT is busy, fall back to a free one the OS picks.
+# (bind the wanted port to test it; on failure ask the OS for any free port with :0.)
+FREEPORT="$(python - "$PORT" <<'PY'
+import socket, sys
+want = int(sys.argv[1])
+def free(p):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("127.0.0.1", p)); return s.getsockname()[1]
+    except OSError:
+        return None
+    finally:
+        s.close()
+print(free(want) or free(0))
+PY
+)"
+[ "$FREEPORT" = "$PORT" ] || warn "port $PORT busy — using $FREEPORT instead"
+PORT="$FREEPORT"
 say "Backend live at http://localhost:${PORT}   (Ctrl-C to stop)"
 cd backend
 exec uvicorn main:app --port "$PORT"
