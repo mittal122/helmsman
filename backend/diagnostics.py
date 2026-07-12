@@ -30,9 +30,11 @@ _RULES = [
      lambda: ("No running Docker daemon on the build host",
               "Building from source needs Docker on the machine running Helmsman.",
               "Start Docker (`sudo systemctl start docker`, or Docker Desktop), then deploy again — or deploy a pre-built image instead of a git repo.")),
-    (lambda s: "repository not found" in s or "could not read from remote" in s or "authentication failed" in s or ("clone" in s and "fail" in s),
+    (lambda s: ("repository" in s and "not found" in s) or "could not read from remote" in s or "authentication failed" in s or ("clone" in s and "fail" in s),
      lambda: ("The git repo couldn't be cloned",
-              "The URL/branch is wrong or unreachable, or the repo is private and needs credentials.",
+              "The URL/branch is wrong or unreachable, or the repo is private and needs credentials. "
+              "Tip: paste the plain repo URL (…/repo.git), not a browser link to a branch/folder — "
+              "Helmsman now auto-converts /tree/<branch>/<subdir> links, but a wrong repo still won't clone.",
               "Check the repo URL and branch. For a private repo use an https URL with a token: `https://<token>@host/org/repo.git`.")),
     (lambda s: "isn't local" in s or "set registry" in s,
      lambda: ("A source build can't reach a remote cluster without a registry",

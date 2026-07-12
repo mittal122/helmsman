@@ -73,6 +73,29 @@ def test_build_rejects_path_traversal(tmp_path):
     with pytest.raises(ValueError):
         builder.build(str(tmp_path), "app:1", "../etc/Dockerfile")
 
+def test_normalize_repo_url_handles_browser_tree_urls():
+    assert builder.normalize_repo_url(
+        "https://github.com/mittal122/AI-Trading-Platform/tree/master/docker") == (
+        "https://github.com/mittal122/AI-Trading-Platform.git", "master", "docker")
+    assert builder.normalize_repo_url("https://github.com/o/r/blob/main/a/b") == (
+        "https://github.com/o/r.git", "main", "a/b")
+    assert builder.normalize_repo_url("https://gitlab.com/o/r/-/tree/dev/svc") == (
+        "https://gitlab.com/o/r.git", "dev", "svc")
+    # plain repo URLs pass through unchanged
+    assert builder.normalize_repo_url("https://github.com/o/r.git") == ("https://github.com/o/r.git", "", "")
+    assert builder.normalize_repo_url("git@github.com:o/r.git") == ("git@github.com:o/r.git", "", "")
+
+def test_clone_normalizes_tree_url_and_picks_branch(monkeypatch):
+    seen = {}
+    def fake_run(args, **k):
+        seen.setdefault("args", args); return "abc123\n"
+    monkeypatch.setattr(builder, "_run", fake_run)
+    monkeypatch.setattr(builder.tempfile, "mkdtemp", lambda prefix="": "/tmp/wd")
+    builder.clone("https://github.com/o/r/tree/main/sub")
+    # first git call is the clone; it must target the .git URL with -b main, not the tree URL
+    assert "https://github.com/o/r.git" in seen["args"]
+    assert "--branch" in seen["args"] and "main" in seen["args"]
+
 def _touch(p):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("FROM scratch\n")

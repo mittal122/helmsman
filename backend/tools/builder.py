@@ -25,6 +25,22 @@ _GIT_URL = re.compile(r"^(https://|git@)[A-Za-z0-9._~:/@%+-]+$")
 # into `git fetch`/`git checkout`, which pass the ref as a bare positional argument)
 _GIT_REF = re.compile(r"^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,199}$")
 
+# A GitHub/GitLab *browser* URL to a branch/subfolder — e.g.
+# https://github.com/owner/repo/tree/main/subdir  (or /blob/, or GitLab /-/tree/).
+# It is NOT cloneable; normalize it to (clone_url, branch, subdir).
+_TREE = re.compile(
+    r"^(https://[^/\s]+/[^/\s]+/[^/\s]+?)(?:\.git)?/(?:-/)?(?:tree|blob)/([^/\s]+)(?:/([^\s]*?))?/?$")
+
+def normalize_repo_url(url: str) -> tuple[str, str, str]:
+    """Turn a browser tree/blob URL into (clone_url, branch, subdir). A plain repo URL is
+    returned unchanged with empty branch/subdir. Lets a user paste the GitHub page URL of a
+    folder and still deploy."""
+    m = _TREE.match(url or "")
+    if not m:
+        return (url or ""), "", ""
+    base, ref, sub = m.group(1), m.group(2), (m.group(3) or "")
+    return base + ".git", ref, sub.strip("/")
+
 def valid_ref(v: str) -> bool:
     return bool(_GIT_REF.match(v or ""))
 
@@ -48,6 +64,11 @@ def current_context() -> str:
 
 def clone(repo_url: str, branch: str = "", ref: str = "") -> tuple[str, str]:
     """Shallow-clone the repo; return (workdir, short_commit_sha)."""
+    # a pasted browser URL (…/tree/<branch>/<subdir>) isn't cloneable — normalize it and
+    # pick up its branch so the clone just works.
+    repo_url, url_branch, _sub = normalize_repo_url(repo_url)
+    if not branch and url_branch:
+        branch = url_branch
     if not _GIT_URL.match(repo_url or ""):
         raise ValueError("invalid git repo URL (must be https://… or git@…)")
     # branch/ref become bare positional argv to git — a leading '-' would be read as a flag

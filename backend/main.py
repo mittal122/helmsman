@@ -208,13 +208,24 @@ def _read_compose_from_repo(git_repo, branch, ref, path):
 async def deploy(req: DeployRequest):
     cfg = req.model_dump()
     src = f"image={req.image}"
+    # a pasted browser URL (…/tree/<branch>/<subdir>) -> real repo + branch + subdir
+    if req.git_repo:
+        clean, url_branch, subdir = builder.normalize_repo_url(req.git_repo)
+        cfg["git_repo"] = clean
+        if url_branch and not req.git_branch:
+            cfg["git_branch"] = url_branch
+        cfg["git_subdir"] = subdir
     # multi-service: parse the compose stack into per-service cfgs before dispatch
     if req.compose or req.compose_path:
         text = req.compose
         if not text:   # read it from the repo
+            subdir = cfg.get("git_subdir", "")
+            cpath = req.compose_path or "docker-compose.yml"
+            if subdir:                      # tree URL pointed at a subfolder -> look there
+                cpath = f"{subdir}/{cpath}"
             try:
                 text = await asyncio.to_thread(_read_compose_from_repo,
-                    req.git_repo, req.git_branch, req.git_ref, req.compose_path)
+                    cfg["git_repo"], cfg.get("git_branch", ""), req.git_ref, cpath)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
             except Exception as e:

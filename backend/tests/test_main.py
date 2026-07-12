@@ -141,6 +141,19 @@ def test_deploy_compose_path_needs_git_repo():
     r = client.post("/deploy", json={"name": "stack", "compose_path": "docker-compose.yml"})
     assert r.status_code == 422
 
+def test_deploy_normalizes_browser_tree_url(monkeypatch):
+    captured = {}
+    async def fake_run(cfg, bus, approvals, monitors, breakers):
+        captured["cfg"] = cfg
+    monkeypatch.setattr(main, "coordinator_run", fake_run)
+    client = TestClient(main.app)
+    r = client.post("/deploy", json={"name": "app",
+        "git_repo": "https://github.com/mittal122/AI-Trading-Platform/tree/master/docker"})
+    assert r.status_code == 200
+    c = captured["cfg"]
+    assert c["git_repo"] == "https://github.com/mittal122/AI-Trading-Platform.git"
+    assert c["git_branch"] == "master" and c["git_subdir"] == "docker"
+
 def test_deploy_rejects_bad_git_url():
     client = TestClient(main.app)
     r = client.post("/deploy", json={"name": "app", "git_repo": "ftp://x/y; rm -rf /"})

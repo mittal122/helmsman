@@ -159,9 +159,23 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                 await emit("command", "Build",
                            f"git clone --depth 1 {('-b ' + branch + ' ') if branch else ''}{safe}")
                 workdir, sha = await asyncio.to_thread(builder.clone, repo, branch, ref)
+                # a tree-URL subfolder becomes the build context (e.g. .../tree/master/docker)
+                context = workdir
+                subdir = cfg.get("git_subdir") or ""
+                if subdir:
+                    context = os.path.join(workdir, subdir)
+                    if ".." in subdir or not os.path.realpath(context).startswith(os.path.realpath(workdir)):
+                        await emit("error", "Build", f"Invalid subfolder in URL: {subdir}")
+                        await guide("Build", [f"invalid subfolder path: {subdir}"])
+                        return
+                    if not os.path.isdir(context):
+                        await emit("error", "Build", f"Subfolder '{subdir}' not found in the repo")
+                        await guide("Build", [f"Dockerfile not found: subfolder {subdir} is missing"])
+                        return
+                    await emit("info", "Build", f"Using subfolder as build context: {subdir}")
                 # no explicit Dockerfile -> detect one in the repo (non-standard names/locations)
                 if not dockerfile:
-                    found = await asyncio.to_thread(builder.list_dockerfiles, workdir)
+                    found = await asyncio.to_thread(builder.list_dockerfiles, context)
                     if "Dockerfile" in found:
                         dockerfile = "Dockerfile"
                     elif len(found) == 1:
@@ -179,8 +193,9 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
                         await guide("Build", [f"multiple Dockerfiles found: {listing}"])
                         return
                 tag = builder.image_tag(name, sha)
-                await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} .")
-                await asyncio.to_thread(builder.build, workdir, tag, dockerfile)
+                await emit("command", "Build",
+                           f"docker build -t {tag} -f {dockerfile} {('./' + subdir) if subdir else '.'}")
+                await asyncio.to_thread(builder.build, context, tag, dockerfile)
                 ctx = await asyncio.to_thread(builder.current_context)
                 await emit("command", "Build", f"# load {tag} into cluster (context {ctx})")
                 method = await asyncio.to_thread(builder.make_available, tag, ctx)

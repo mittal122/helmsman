@@ -732,6 +732,29 @@ async def test_build_autodetects_sole_nonstandard_dockerfile(monkeypatch):
     assert "endpoint" in [e.type for e in events]
 
 @pytest.mark.asyncio
+async def test_build_uses_subdir_as_context(monkeypatch, tmp_path):
+    # a tree-URL subfolder (git_subdir) becomes the docker build context
+    _stub_tools(monkeypatch)
+    (tmp_path / "docker").mkdir()
+    (tmp_path / "docker" / "Dockerfile").write_text("FROM scratch\n")
+    monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: (str(tmp_path), "sha1"))
+    monkeypatch.setattr(coordinator.builder, "image_tag", lambda name, sha: f"{name}:src-{sha}")
+    monkeypatch.setattr(coordinator.builder, "current_context", lambda: "kind-helmsman")
+    monkeypatch.setattr(coordinator.builder, "make_available", lambda tag, ctx: "kind")
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: None)
+    used = {}
+    monkeypatch.setattr(coordinator.builder, "build",
+                        lambda ctx, tag, df: used.update(ctx=ctx, df=df))
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git",
+                               git_subdir="docker", dockerfile=""),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    assert used["ctx"].endswith("/docker")      # built with the subfolder as context
+    assert used["df"] == "Dockerfile"           # detected inside the subfolder
+
+@pytest.mark.asyncio
 async def test_build_multiple_dockerfiles_stops_with_list(monkeypatch):
     # no dockerfile given, several matches, no root -> stop and list them, never build/deploy
     _stub_tools(monkeypatch)
