@@ -58,9 +58,12 @@ connection. Everything after that is instant. On Linux it may ask for your passw
 > (under "Deploy a multi-service docker-compose stack"). Helmsman deploys **every service**
 > as its own release in one namespace — so `db:5432` / `redis:6379` in your app keep working
 > via cluster DNS with no rewrite. Databases get TCP/exec health probes (not HTTP), named
-> volumes become PVCs, and secret-looking env vars are redacted. v1 needs pre-built `image:`
-> refs (a `build:`-only service is rejected); custom networks / restart policies are skipped
-> with a warning.
+> volumes become PVCs (names sanitized to K8s rules), and secret-looking env vars are redacted.
+> `${VAR}` / `${VAR:-default}` interpolation is resolved from the values you supply in
+> `compose_env` (e.g. `TAG`, `POSTGRES_PASSWORD`, `JWT_SECRET`). Public images (postgres/nginx)
+> often carry a CVE — tick **"Deploy even if the image scan finds vulnerabilities"** to
+> proceed. v1 needs pre-built `image:` refs (a `build:`-only service is rejected); custom
+> networks / restart policies are skipped with a warning.
 
 ## Configuration (optional)
 
@@ -96,7 +99,7 @@ All via environment variables — the defaults work for local use:
 ## Development
 
 ```bash
-cd backend && python -m pytest -q      # 196 tests
+cd backend && python -m pytest -q      # 199 tests
 ```
 
 ## Advanced — other ways to run (only if you already know Docker)
