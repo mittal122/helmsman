@@ -51,8 +51,8 @@ def display_url(url: str) -> str:
     """Strip any `user:token@` credentials before the URL is logged/shown."""
     return re.sub(r"//[^/@]*@", "//", url or "")
 
-def _run(args, cwd=None, timeout=60):
-    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def _run(args, cwd=None, timeout=60, env=None):
+    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip()[:600] or "command failed")
     return r.stdout
@@ -61,6 +61,19 @@ def current_context() -> str:
     r = subprocess.run(["kubectl", "config", "current-context"],
                        capture_output=True, text=True, timeout=10)
     return r.stdout.strip() if r.returncode == 0 else ""
+
+def build_base() -> str:
+    """Where cloned sources land. NOT /tmp: a snap-confined Docker daemon (Ubuntu's default
+    `snap install docker`) can't read /tmp or hidden dirs as a build context — the build would
+    fail 'path not found'. A non-hidden dir under $HOME is readable by both snap and normal
+    Docker. Overridable via HELMSMAN_BUILD_DIR; falls back to the system temp dir if $HOME is
+    unusable."""
+    base = os.environ.get("HELMSMAN_BUILD_DIR") or os.path.join(os.path.expanduser("~"), "helmsman-build")
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        return base
+    except OSError:
+        return tempfile.gettempdir()
 
 def clone(repo_url: str, branch: str = "", ref: str = "") -> tuple[str, str]:
     """Shallow-clone the repo; return (workdir, short_commit_sha)."""
@@ -76,7 +89,7 @@ def clone(repo_url: str, branch: str = "", ref: str = "") -> tuple[str, str]:
         raise ValueError("invalid branch name")
     if ref and not valid_ref(ref):
         raise ValueError("invalid git ref")
-    workdir = tempfile.mkdtemp(prefix="helmsman-src-")
+    workdir = tempfile.mkdtemp(prefix="helmsman-src-", dir=build_base())
     args = ["git", "clone", "--depth", "1"]
     if branch:
         args += ["--branch", branch]
@@ -98,12 +111,16 @@ def build(workdir: str, image_tag: str, dockerfile: str = "Dockerfile") -> None:
 
 def make_available(image_tag: str, context: str) -> str:
     """Inject the built image where the cluster can pull it. Returns the method used."""
+    # kind/minikube stage the image through `docker save -o <TMPDIR>/images.tar`. A
+    # snap-confined Docker daemon can't write /tmp, so point TMPDIR at the (home-based) build
+    # base it CAN write — else the load fails 'invalid output path'.
+    env = {**os.environ, "TMPDIR": build_base()}
     if context.startswith("kind-"):
         _run(["kind", "load", "docker-image", image_tag, "--name", context[len("kind-"):]],
-             timeout=LOAD_TIMEOUT_S)
+             timeout=LOAD_TIMEOUT_S, env=env)
         return "kind"
     if context == "minikube":
-        _run(["minikube", "image", "load", image_tag], timeout=LOAD_TIMEOUT_S)
+        _run(["minikube", "image", "load", image_tag], timeout=LOAD_TIMEOUT_S, env=env)
         return "minikube"
     if os.environ.get("REGISTRY"):
         _run(["docker", "push", image_tag], timeout=LOAD_TIMEOUT_S)
@@ -112,7 +129,11 @@ def make_available(image_tag: str, context: str) -> str:
                        f"and use a pushable image tag to deploy a source build to it")
 
 def cleanup(workdir: str) -> None:
-    if workdir and workdir.startswith(tempfile.gettempdir()):
+    # only remove our own clone dirs (helmsman-src-* under the build base or the temp dir)
+    if not workdir or not os.path.basename(workdir).startswith("helmsman-src-"):
+        return
+    allowed = (os.path.realpath(build_base()), os.path.realpath(tempfile.gettempdir()))
+    if os.path.realpath(workdir).startswith(allowed):
         shutil.rmtree(workdir, ignore_errors=True)
 
 _SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "dist", "build", "__pycache__"}

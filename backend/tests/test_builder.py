@@ -85,12 +85,22 @@ def test_normalize_repo_url_handles_browser_tree_urls():
     assert builder.normalize_repo_url("https://github.com/o/r.git") == ("https://github.com/o/r.git", "", "")
     assert builder.normalize_repo_url("git@github.com:o/r.git") == ("git@github.com:o/r.git", "", "")
 
-def test_clone_normalizes_tree_url_and_picks_branch(monkeypatch):
+def test_build_base_honors_env_and_avoids_tmp(monkeypatch, tmp_path):
+    monkeypatch.setenv("HELMSMAN_BUILD_DIR", str(tmp_path / "bld"))
+    assert builder.build_base() == str(tmp_path / "bld")
+    assert (tmp_path / "bld").is_dir()
+    # default is a non-hidden dir under $HOME (snap-docker can't read /tmp or hidden dirs)
+    monkeypatch.delenv("HELMSMAN_BUILD_DIR", raising=False)
+    monkeypatch.setattr(builder.os.path, "expanduser", lambda p: str(tmp_path / "home"))
+    assert builder.build_base() == str(tmp_path / "home" / "helmsman-build")
+
+def test_clone_normalizes_tree_url_and_picks_branch(monkeypatch, tmp_path):
     seen = {}
     def fake_run(args, **k):
         seen.setdefault("args", args); return "abc123\n"
     monkeypatch.setattr(builder, "_run", fake_run)
-    monkeypatch.setattr(builder.tempfile, "mkdtemp", lambda prefix="": "/tmp/wd")
+    monkeypatch.setattr(builder, "build_base", lambda: str(tmp_path))
+    monkeypatch.setattr(builder.tempfile, "mkdtemp", lambda prefix="", dir=None: str(tmp_path / "wd"))
     builder.clone("https://github.com/o/r/tree/main/sub")
     # first git call is the clone; it must target the .git URL with -b main, not the tree URL
     assert "https://github.com/o/r.git" in seen["args"]

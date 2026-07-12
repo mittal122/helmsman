@@ -732,11 +732,12 @@ async def test_build_autodetects_sole_nonstandard_dockerfile(monkeypatch):
     assert "endpoint" in [e.type for e in events]
 
 @pytest.mark.asyncio
-async def test_build_uses_subdir_as_context(monkeypatch, tmp_path):
-    # a tree-URL subfolder (git_subdir) becomes the docker build context
+async def test_build_subdir_biases_detection_context_is_repo_root(monkeypatch, tmp_path):
+    # tree-URL subfolder only biases WHICH Dockerfile is picked; context stays the repo root
+    # and the Dockerfile path is root-relative (so it COPYs from root like Docker/compose expect)
     _stub_tools(monkeypatch)
     (tmp_path / "docker").mkdir()
-    (tmp_path / "docker" / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "docker" / "backend.Dockerfile").write_text("FROM scratch\n")
     monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: (str(tmp_path), "sha1"))
     monkeypatch.setattr(coordinator.builder, "image_tag", lambda name, sha: f"{name}:src-{sha}")
     monkeypatch.setattr(coordinator.builder, "current_context", lambda: "kind-helmsman")
@@ -751,8 +752,31 @@ async def test_build_uses_subdir_as_context(monkeypatch, tmp_path):
     await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git",
                                git_subdir="docker", dockerfile=""),
                           bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
-    assert used["ctx"].endswith("/docker")      # built with the subfolder as context
-    assert used["df"] == "Dockerfile"           # detected inside the subfolder
+    assert used["ctx"] == str(tmp_path)                 # context = repo ROOT, not the subfolder
+    assert used["df"] == "docker/backend.Dockerfile"    # root-relative path, biased to the subdir
+
+@pytest.mark.asyncio
+async def test_build_explicit_subdir_dockerfile_builds_from_root(monkeypatch, tmp_path):
+    # user picked "docker/backend.Dockerfile" (from Detect) + tree URL gave subdir "docker":
+    # must NOT double the subdir — build context = root, -f = the picked path verbatim
+    _stub_tools(monkeypatch)
+    (tmp_path / "docker").mkdir()
+    (tmp_path / "docker" / "backend.Dockerfile").write_text("FROM scratch\n")
+    monkeypatch.setattr(coordinator.builder, "clone", lambda repo, br, ref: (str(tmp_path), "sha1"))
+    monkeypatch.setattr(coordinator.builder, "image_tag", lambda name, sha: f"{name}:src-{sha}")
+    monkeypatch.setattr(coordinator.builder, "current_context", lambda: "kind-helmsman")
+    monkeypatch.setattr(coordinator.builder, "make_available", lambda tag, ctx: "kind")
+    monkeypatch.setattr(coordinator.builder, "cleanup", lambda wd: None)
+    used = {}
+    monkeypatch.setattr(coordinator.builder, "build",
+                        lambda ctx, tag, df: used.update(ctx=ctx, df=df))
+    monkeypatch.setattr(coordinator, "MONITOR_INTERVAL_S", 0)
+    monkeypatch.setattr(coordinator, "MONITOR_MAX_CYCLES", 1)
+    bus = EventBus(); q = bus.subscribe()
+    await coordinator.run(_cfg(mode="autonomous", image="", git_repo="https://github.com/x/y.git",
+                               git_subdir="docker", dockerfile="docker/backend.Dockerfile"),
+                          bus, approvals_mod.Approvals(), monitors_mod.Monitors(), breakers_mod.Breaker())
+    assert used["ctx"] == str(tmp_path) and used["df"] == "docker/backend.Dockerfile"
 
 @pytest.mark.asyncio
 async def test_build_multiple_dockerfiles_stops_with_list(monkeypatch):

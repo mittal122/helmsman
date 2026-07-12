@@ -73,6 +73,7 @@ All via environment variables — the defaults work for local use:
 | `KUBECONFIG` | Which cluster to manage. The setup script points at the local one it created. |
 | `KUBECONFIG_ENC_KEY` | Enables the encrypted multi-cluster kubeconfig store. |
 | `REGISTRY` | Push target for **deploy-from-Git** builds when the cluster is remote (kind/minikube need none). |
+| `HELMSMAN_BUILD_DIR` | Where deploy-from-Git clones/builds (default `~/helmsman-build`). Kept out of `/tmp` so a **snap-installed Docker** can read the build context. |
 
 ## Features
 
@@ -95,7 +96,7 @@ All via environment variables — the defaults work for local use:
 ## Development
 
 ```bash
-cd backend && python -m pytest -q      # 190 tests
+cd backend && python -m pytest -q      # 196 tests
 ```
 
 ## Advanced — other ways to run (only if you already know Docker)
