@@ -92,6 +92,8 @@ class DeployRequest(BaseModel):
     dockerfile: str = ""   # "" = auto-detect in the repo (root Dockerfile / sole match / else list)
     compose: str = ""      # multi-service: raw docker-compose YAML (deploys the whole stack)
     compose_path: str = "" # or read the compose file at this path inside git_repo
+    compose_env: dict[str, str] = {}  # values for ${VAR} interpolation in the compose file (e.g. TAG, POSTGRES_PASSWORD)
+    allow_vulnerable: bool = False  # operator override: proceed even if the image scan gate finds CRITICAL/HIGH vulns
 
     @field_validator("compose_path")
     @classmethod
@@ -231,7 +233,7 @@ async def deploy(req: DeployRequest):
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"could not read compose from repo: {e}")
         try:
-            services, warnings = compose.parse(text)
+            services, warnings = compose.parse(text, req.compose_env)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=f"compose parse error: {e}")
         cfg["services"], cfg["warnings"] = services, warnings

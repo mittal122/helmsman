@@ -53,6 +53,12 @@ def build_values(cfg: dict) -> dict:
         values["probe"] = dict(cfg["probe"])
     if cfg.get("stack"):
         values["stack"] = cfg["stack"]
+        # Compose deploys arbitrary third-party images that set their own USER (often a NAME
+        # like `USER node`/`appuser`). runAsNonRoot:true makes k8s refuse a non-numeric user
+        # ("cannot verify user is non-root"). Respect the image's USER unless the compose file
+        # gave a numeric one. (The user's OWN single-service app keeps runAsNonRoot enforced.)
+        if cfg.get("run_as_user") is None:
+            values["runAsNonRoot"] = False
     if cfg.get("resources"):                    # compose partial -> overlay on chart defaults
         r = {"requests": dict(DEFAULT_RESOURCES["requests"]), "limits": dict(DEFAULT_RESOURCES["limits"])}
         r["requests"].update((cfg["resources"].get("requests") or {}))

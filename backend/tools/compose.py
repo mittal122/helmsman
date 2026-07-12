@@ -26,6 +26,56 @@ _SECRETISH = re.compile(r"(?i)(PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|APIKEY|KE
 # RFC1123 label — the compose service name becomes a K8s Service/Deployment name (DNS).
 _RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 
+def _k8s_name(s: str) -> str:
+    """Compose volume names allow '_' (e.g. postgres_data); K8s names don't. Coerce to a
+    valid RFC1123 label so the PVC/volume name is accepted."""
+    s = re.sub(r"[^a-z0-9-]", "-", (s or "").lower()).strip("-")
+    return s or "vol"
+
+
+# ${VAR} / ${VAR:-default} / ${VAR:?err} / $VAR — compose interpolates BEFORE parsing.
+_VAR = re.compile(r"\$(?:\$|\{([A-Za-z_][A-Za-z0-9_]*)(?::?[-?+])?([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+
+def interpolate(text: str, env: dict | None = None) -> tuple[str, list]:
+    """Resolve docker-compose variable substitution against `env` (NOT the server's os.environ
+    — that would leak host env into a user's deploy). Returns (text, warnings). `$$` -> `$`.
+    A required var (`${VAR:?...}`) with no value substitutes empty and warns, so a value the
+    user forgot surfaces clearly instead of a cryptic runtime crash."""
+    env = env or {}
+    warns: list = []
+
+    def repl(m):
+        if m.group(0) == "$$":
+            return "$"
+        name = m.group(1) or m.group(3)
+        rest = m.group(2) or ""
+        # figure out the operator (:- , - , :? , ? , :+ , +) from the matched text
+        raw = m.group(0)
+        op = ""
+        if name and "{" in raw:
+            after = raw[raw.index(name) + len(name):-1]  # between name and closing }
+            if after[:2] in (":-", ":?", ":+"):
+                op = after[:2]
+            elif after[:1] in ("-", "?", "+"):
+                op = after[:1]
+        val = env.get(name)
+        has = val not in (None, "") if op.startswith(":") else val is not None
+        if op in (":-", "-"):
+            return val if has else rest
+        if op in (":+", "+"):
+            return rest if has else ""
+        if op in (":?", "?"):
+            if has:
+                return val
+            warns.append(f"variable ${{{name}}} is required but no value was provided — "
+                         f"substituted empty (set it in the env fields)")
+            return ""
+        if val is None:
+            warns.append(f"variable ${{{name}}} is unset — substituted empty")
+            return ""
+        return val
+
+    return _VAR.sub(repl, text), warns
 
 def _container_port(spec) -> int | None:
     """Extract the container (target) port from a compose ports entry."""
@@ -158,7 +208,7 @@ def _volumes(svc: dict, warns: list, name: str) -> list:
             warns.append(f"{name}: volume '{v}' skipped (bind/anonymous mounts aren't supported; "
                          f"use a named volume for persistence)")
             continue
-        out.append({"name": src, "mountPath": tgt, "size": "1Gi"})
+        out.append({"name": _k8s_name(src), "mountPath": tgt, "size": "1Gi"})
     return out
 
 
@@ -184,10 +234,11 @@ def _topo_order(names: list, deps: dict) -> list:
     return order
 
 
-def parse(yaml_text: str) -> tuple[list, list]:
+def parse(yaml_text: str, env: dict | None = None) -> tuple[list, list]:
     """docker-compose YAML -> (services, warnings). services is a list of normalized deploy
-    cfgs in depends_on order. Raises ValueError on malformed input / build-only service /
-    cycle so the caller can 422 with a clear message."""
+    cfgs in depends_on order. `env` supplies values for ${VAR} interpolation. Raises ValueError
+    on malformed input / build-only service / cycle so the caller can 422 with a clear message."""
+    yaml_text, warns = interpolate(yaml_text, env)     # resolve ${VAR} BEFORE parsing (compose order)
     try:
         doc = yaml.safe_load(yaml_text)
     except yaml.YAMLError as e:
@@ -195,7 +246,6 @@ def parse(yaml_text: str) -> tuple[list, list]:
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict) or not doc["services"]:
         raise ValueError("no 'services:' found in the compose file")
 
-    warns: list = []
     if doc.get("networks"):
         warns.append("custom networks ignored — all services share one namespace (compose's default flat network)")
     if doc.get("configs") or doc.get("secrets"):

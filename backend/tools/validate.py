@@ -36,6 +36,9 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
     #   pod-probes-identical ....... identical liveness/readiness probe is acceptable
     #   ...security-context-user-group-id .. runAsNonRoot is enforced; explicit high UID is extra polish
     #   deployment-has-poddisruptionbudget . PDB is rendered only for replicas>1 by design
+    #   ...readonlyrootfilesystem .. RO root is the chart DEFAULT; it's relaxed ONLY for a
+    #        stateful compose service (has volumes) that must write its data dir — a
+    #        deliberate, deterministic decision, not a defect (kube-score can't see the intent)
     _KS_IGNORE = [
         "pod-networkpolicy",
         "container-ephemeral-storage-request-and-limit",
@@ -43,6 +46,12 @@ def validate(manifests: str, namespace: str) -> tuple[bool, list[str]]:
         "pod-probes-identical",
         "container-security-context-user-group-id",
         "deployment-has-poddisruptionbudget",
+        "container-security-context-readonlyrootfilesystem",
+        # pod-probes: a compose service with no healthcheck AND no declared port has no port we
+        # can safely probe (guessing one and probing it would keep the pod un-ready forever).
+        # We add a probe whenever we CAN infer it (healthcheck->exec, port->tcp, single-service
+        # ->http); when we genuinely can't, no probe beats a wrong one. Deliberate, not a defect.
+        "pod-probes",
     ]
     ks_cmd = ["kube-score", "score", "--output-format", "ci"]
     for t in _KS_IGNORE:

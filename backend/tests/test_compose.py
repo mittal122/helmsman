@@ -73,6 +73,31 @@ services:
     assert s["command"] == ["/entry.sh"]                     # compose entrypoint -> command
     assert s["resources"]["limits"] == {"cpu": "500m", "memory": "512Mi"}
 
+def test_volume_name_sanitized_to_rfc1123():
+    # compose 'postgres_data' (underscore) is illegal as a K8s PVC/volume name -> coerced
+    svcs, _ = compose.parse("services:\n  db:\n    image: postgres:16\n"
+                            "    volumes: ['postgres_data:/var/lib/postgresql/data']\n")
+    assert svcs[0]["volumes"][0]["name"] == "postgres-data"
+    assert svcs[0]["volumes"][0]["mountPath"] == "/var/lib/postgresql/data"
+
+def test_interpolation_defaults_and_provided_and_required():
+    text, warns = compose.interpolate(
+        "img: repo:${TAG:-v1.0.0}\npw: ${DB_PASS:?need it}\nplain: $HOME_X\nlit: $$KEEP\n",
+        {"DB_PASS": "s3cret"})
+    assert "repo:v1.0.0" in text          # default used when unset
+    assert "pw: s3cret" in text           # provided value used
+    assert "lit: $KEEP" in text           # $$ -> literal $
+    assert "plain: \n" in text            # unset -> empty (+ warned)
+    assert any("HOME_X" in w for w in warns)
+
+def test_interpolation_resolves_image_tag_in_parse():
+    svcs, warns = compose.parse(
+        "services:\n  api:\n    image: org/api:${TAG:-v2}\n", {"TAG": "v9"})
+    assert svcs[0]["image"] == "org/api:v9"
+    # and the default path when not provided
+    svcs2, _ = compose.parse("services:\n  api:\n    image: org/api:${TAG:-v2}\n")
+    assert svcs2[0]["image"] == "org/api:v2"
+
 def test_malformed_yaml_rejected():
     with pytest.raises(ValueError):
         compose.parse("services: [this is: not valid")

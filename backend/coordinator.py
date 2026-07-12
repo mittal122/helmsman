@@ -252,13 +252,18 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         await emit("scan", "Scan", img_scan["summary"],
                    {"image": img_scan, "config": cfg_scan})
         if img_scan["available"] and not img_scan["ok"]:
-            await emit("error", "Scan",
-                       f"Image scan gate failed: {img_scan['summary']}",
-                       {"findings": img_scan["findings"]})
-            await guide("Scan", [img_scan["summary"]] +
-                        [f"{f.get('severity','')} {f.get('id','')} {f.get('pkg','')}"
-                         for f in img_scan["findings"][:5]])
-            return
+            if cfg.get("allow_vulnerable"):
+                await emit("info", "Scan",
+                           f"Image has findings ({img_scan['summary']}) — proceeding: operator "
+                           f"set allow_vulnerable. Findings still reported above.")
+            else:
+                await emit("error", "Scan",
+                           f"Image scan gate failed: {img_scan['summary']}",
+                           {"findings": img_scan["findings"]})
+                await guide("Scan", [img_scan["summary"]] +
+                            [f"{f.get('severity','')} {f.get('id','')} {f.get('pkg','')}"
+                             for f in img_scan["findings"][:5]])
+                return
         if not img_scan["available"]:
             await emit("info", "Scan", "trivy not installed — image scan skipped (not a pass)")
         await emit("stage_exit", "Scan", "Scan complete")
@@ -463,10 +468,15 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             img_scan = await asyncio.to_thread(scan.scan_image, svc["image"])
             await emit("scan", st("Scan"), img_scan["summary"], {"image": img_scan})
             if img_scan["available"] and not img_scan["ok"]:
-                await emit("error", st("Scan"), f"Image scan gate failed for {sn}: {img_scan['summary']}",
-                           {"findings": img_scan["findings"]})
-                await guide(st("Scan"), [img_scan["summary"]])
-                return
+                if cfg.get("allow_vulnerable"):
+                    await emit("info", st("Scan"),
+                               f"{sn} image has findings ({img_scan['summary']}) — proceeding "
+                               f"(operator set allow_vulnerable).")
+                else:
+                    await emit("error", st("Scan"), f"Image scan gate failed for {sn}: {img_scan['summary']}",
+                               {"findings": img_scan["findings"]})
+                    await guide(st("Scan"), [img_scan["summary"]])
+                    return
             await emit("stage_exit", st("Scan"), "Scanned")
 
             await emit("stage_enter", st("Deploy"), f"Applying {sn}")

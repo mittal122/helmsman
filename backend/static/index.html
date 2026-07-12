@@ -195,6 +195,8 @@
         <div style="margin-top:6px"><label>docker-compose.yml <span style="color:var(--faint);font-weight:400">(paste — deploys every service; overrides Image/Git above)</span></label>
           <textarea name="compose" rows="6" placeholder="services:&#10;  web:&#10;    image: nginx:1.27&#10;    ports: ['8080:80']&#10;  db:&#10;    image: postgres:16&#10;    environment: {POSTGRES_PASSWORD: pw}" style="width:100%;font-family:var(--mono);font-size:.78rem"></textarea></div>
       </details>
+      <label class="mini" style="display:flex;align-items:center;gap:6px;margin-top:6px;color:var(--faint)">
+        <input type="checkbox" id="allow-vuln"> Deploy even if the image scan finds CRITICAL/HIGH vulnerabilities (public images like postgres/nginx usually have some)</label>
       <div class="fbtns">
         <button class="btn primary" id="deploy-btn">Deploy — show everything</button>
         <span class="mini"><input id="rb-rev" type="number" placeholder="rev#"><button class="btn reject" id="rb-btn">Roll back</button></span>
@@ -472,7 +474,7 @@
       name:val("name"),image:val("image"),namespace:val("namespace"),port:Number(val("port")),
       replicas:Number(val("replicas")),mode:mode,env:kv(val("env")),secrets:kv(val("secrets")),cluster:val("cluster")||"",
       git_repo:val("git_repo")||"",git_branch:val("git_branch")||"",dockerfile:val("dockerfile")||"",
-      compose:val("compose")||""
+      compose:val("compose")||"",allow_vulnerable:$("allow-vuln").checked
     })}).catch(function(){setStatus("error","couldn't reach backend");});
   };
   $("df-detect").onclick=function(){
