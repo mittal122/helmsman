@@ -500,9 +500,13 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 return
             await emit("stage_exit", st("Deploy"), "Applied")
 
-        # Verify all rollouts (shared timeout budget)
+        # Verify all rollouts (shared timeout budget). A cronjob has no Deployment to roll out —
+        # it's "scheduled", not "ready", so it's excluded from the wait (else it hangs forever).
         await emit("stage_enter", "Verify", "Waiting for all services to become ready")
-        pending = {s["name"] for s in services}
+        for svc in services:
+            if svc.get("workload") == "cronjob":
+                await emit("info", "Verify", f"{svc['name']}: CronJob scheduled ({svc.get('schedule','')})")
+        pending = {s["name"] for s in services if s.get("workload") != "cronjob"}
         last = {}
         for _ in range(ROLLOUT_TIMEOUT_S // max(POLL_INTERVAL_S, 1)):
             for sn in list(pending):

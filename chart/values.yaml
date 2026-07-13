@@ -3,6 +3,9 @@ image: mendhak/http-https-echo:31
 port: 8080
 replicas: 2
 probePath: /
+workload: deployment   # deployment (served) | worker (no Service/Ingress) | cronjob (scheduled)
+schedule: ""           # cronjob only: a cron expression, e.g. "*/5 * * * *"
+stopGraceSeconds: null # terminationGracePeriodSeconds (graceful shutdown); null = k8s default (30)
 # multi-service (compose) extras — all optional, defaults keep single-service renders identical
 command: []          # container command (compose entrypoint)
 args: []             # container args (compose command)

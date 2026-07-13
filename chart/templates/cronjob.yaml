@@ -1,0 +1,92 @@
+{{- if eq .Values.workload "cronjob" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.name }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            {{- include "app.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.stopGraceSeconds }}
+          terminationGracePeriodSeconds: {{ . }}
+          {{- end }}
+          securityContext:
+            {{- if .Values.runAsNonRoot }}
+            runAsNonRoot: true
+            {{- end }}
+            {{- with .Values.runAsUser }}
+            runAsUser: {{ . }}
+            {{- end }}
+            {{- with .Values.fsGroup }}
+            fsGroup: {{ . }}
+            {{- end }}
+            seccompProfile:
+              type: RuntimeDefault
+          # trimmed vs deployment.yaml on purpose: a Job has no inbound port -> no ports/probes.
+          containers:
+            - name: {{ .Values.name }}
+              image: {{ .Values.image | quote }}
+              {{- with .Values.command }}
+              command:
+                {{- range . }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- end }}
+              {{- with .Values.args }}
+              args:
+                {{- range . }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- end }}
+              envFrom:
+{{- if .Values.env }}
+                - configMapRef:
+                    name: {{ .Values.name }}-config
+{{- end }}
+{{- if .Values.secrets }}
+                - secretRef:
+                    name: {{ .Values.name }}-secret
+{{- end }}
+              resources:
+                requests:
+                  cpu: {{ .Values.resources.requests.cpu | quote }}
+                  memory: {{ .Values.resources.requests.memory | quote }}
+                limits:
+                  cpu: {{ .Values.resources.limits.cpu | quote }}
+                  memory: {{ .Values.resources.limits.memory | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: {{ not .Values.writableRoot }}
+                {{- if .Values.dropCapabilities }}
+                capabilities:
+                  drop: ["ALL"]
+                {{- end }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                {{- range .Values.volumes }}
+                - name: {{ .name }}
+                  mountPath: {{ .mountPath }}
+                {{- end }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            {{- range .Values.volumes }}
+            - name: {{ .name }}
+              persistentVolumeClaim:
+                claimName: {{ $.Values.name }}-{{ .name }}
+            {{- end }}
+{{- end }}

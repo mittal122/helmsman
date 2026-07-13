@@ -1,3 +1,4 @@
+{{- if ne .Values.workload "cronjob" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +24,9 @@ spec:
       labels:
         {{- include "app.labels" . | nindent 8 }}
     spec:
+      {{- with .Values.stopGraceSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       securityContext:
         {{- if .Values.runAsNonRoot }}
         runAsNonRoot: true
@@ -108,3 +112,4 @@ spec:
           persistentVolumeClaim:
             claimName: {{ $.Values.name }}-{{ .name }}
         {{- end }}
+{{- end }}

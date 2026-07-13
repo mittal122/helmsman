@@ -53,6 +53,31 @@ def test_ingest_maps_ingress_and_scaling_to_chart_keys():
     assert 'host: "shop.example.com"' in y and "averageUtilization: 70" in y
 
 
+def test_ingest_worker_and_cronjob_workloads():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "mailer", "image": "org/mailer:2", "type": "worker"},
+        {"name": "nightly", "image": "org/backup:2", "type": "cronjob", "schedule": "0 3 * * *"}]}))
+    assert r["missing"] == []                                   # worker needs no port
+    mailer = next(s for s in r["cfg"]["services"] if s["name"] == "mailer")
+    nightly = next(s for s in r["cfg"]["services"] if s["name"] == "nightly")
+    assert mailer["workload"] == "worker" and mailer["published"] is False and mailer["hpa_enabled"] is False
+    assert nightly["workload"] == "cronjob" and nightly["schedule"] == "0 3 * * *"
+    intake.validate_services(r["cfg"]["services"])
+    # renders: worker -> Deployment no Service; cronjob -> CronJob
+    from tools import manifests
+    yw = manifests.render({**mailer, "namespace": "default", "stack": "s"})
+    yc = manifests.render({**nightly, "namespace": "default", "stack": "s"})
+    assert "kind: Deployment" in yw and "kind: Service" not in yw
+    assert "kind: CronJob" in yc and 'schedule: "0 3 * * *"' in yc
+
+
+def test_ingest_cronjob_without_schedule_is_missing():
+    r = intake.ingest(json.dumps({"services": [{"name": "j", "image": "j:1", "type": "cronjob"}]}))
+    assert ("j", "schedule") in {(m["service"], m["field"]) for m in r["missing"]}
+    with pytest.raises(ValueError):
+        intake.validate_services([{"name": "j", "image": "j:1", "workload": "cronjob"}])
+
+
 def test_ingest_no_scaling_block_leaves_hpa_off():
     r = intake.ingest(json.dumps({"services": [{"name": "db", "image": "postgres:16", "port": 5432}]}))
     assert r["cfg"]["services"][0]["hpa_enabled"] is False

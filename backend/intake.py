@@ -42,8 +42,11 @@ _SCHEMA_EXAMPLE = """{
   "services": [
     {
       "name": "web",                        // REQUIRED, lowercase (becomes the K8s name + DNS)
+      "type": "deployment",                 // deployment (served) | worker (background) | cronjob (scheduled)
       "image": "myorg/web:1.4.2",           // REQUIRED, pre-built + version-pinned (never :latest)
-      "port": 3000,                          // REQUIRED, the port the container listens on
+      "port": 3000,                          // REQUIRED for a deployment (the listen port); omit for worker/cronjob
+      "schedule": "*/5 * * * *",            // cronjob only: cron expression
+      "stop_grace_seconds": 30,             // optional: graceful-shutdown period
       "extra_ports": [9090],                // other container ports (optional)
       "replicas": 2,
       "published": true,                     // true = browser-facing (gets a port-forward)
@@ -86,6 +89,9 @@ def build_prompt(context: dict | None = None) -> str:
     L.append("- Detect the architecture automatically: include EVERY component that must run "
              "(frontend, backend, workers, cron jobs, databases, queues, background services). "
              "One entry in \"services\" per component. Do not invent components that don't exist.")
+    L.append("- Set each service's \"type\": a served app/API/db is \"deployment\"; a background "
+             "worker/queue-consumer is \"worker\" (no port); a scheduled task is \"cronjob\" "
+             "(give its \"schedule\").")
     L.append("- For each service report: image, the container port, env vars, secrets, health "
              "check, resource requests/limits, replicas, volumes, and any startup command.")
     L.append("- If a service is reachable from a browser and needs a public URL, give its "
@@ -135,6 +141,13 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         warns.append(f"service name '{name_raw}' adjusted to '{name}' (Kubernetes names are lowercase alnum + '-')")
     label = name or "(unnamed)"
 
+    # workload type: served deployment (default) | background worker | scheduled cronjob.
+    wl = str(raw.get("type") or raw.get("workload") or "deployment").strip().lower()
+    if wl not in ("deployment", "worker", "cronjob"):
+        warns.append(f"{label}: unknown type '{wl}' — treated as a deployment")
+        wl = "deployment"
+    served = wl == "deployment"
+
     image = str(raw.get("image") or "").strip()
     if not image:
         missing.append({"service": label, "field": "image",
@@ -148,9 +161,16 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
     if port is None or not (0 < port < 65536):
         if raw.get("port") not in (None, ""):
             warns.append(f"{label}: port '{raw.get('port')}' is not a valid port — treated as missing")
-        missing.append({"service": label, "field": "port",
-                        "hint": "the port number the container listens on, e.g. 3000"})
+        # only a served deployment needs an inbound port; a worker/cronjob doesn't listen.
+        if served:
+            missing.append({"service": label, "field": "port",
+                            "hint": "the port number the container listens on, e.g. 3000"})
         port = None
+
+    schedule = str(raw.get("schedule") or "").strip()
+    if wl == "cronjob" and not schedule:
+        missing.append({"service": label, "field": "schedule",
+                        "hint": "a cron expression for when to run, e.g. '*/5 * * * *' (every 5 min)"})
 
     env = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("env") or {}).items()}
     secrets = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("secrets") or {}).items()}
@@ -197,12 +217,15 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "probe": _norm_probe(raw.get("health"), port),
         "volumes": volumes,
         "run_as_user": _int_or_none(raw.get("run_as_user")),
-        "published": bool(raw.get("published", True)),
-        "ingress_host": ingress_host,
-        "hpa_enabled": hpa_on,
+        "published": served and bool(raw.get("published", True)),
+        "ingress_host": ingress_host if served else "",
+        "hpa_enabled": hpa_on and served,
         "hpa_min": hpa_min or 2,
         "hpa_max": hpa_max or 5,
         "hpa_cpu": _int_or_none(sc.get("cpu")) or 80,
+        "workload": wl,
+        "schedule": schedule,
+        "stop_grace": _int_or_none(raw.get("stop_grace_seconds")),
     }
 
 
@@ -210,11 +233,17 @@ def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
     lines = [f"Stack '{app_name}' → namespace '{ns}', {len(services)} service"
              f"{'s' if len(services) != 1 else ''}:"]
     for s in services:
-        bits = [s["image"] or "IMAGE MISSING", f"port {s['port']}", f"{s['replicas']}x"]
-        if s.get("hpa_enabled"):
-            bits[-1] = f"autoscale {s['hpa_min']}–{s['hpa_max']} @ {s['hpa_cpu']}% CPU"
-        if s.get("ingress_host"):
-            bits.append(f"ingress {s['ingress_host']}")
+        wl = s.get("workload", "deployment")
+        if wl == "cronjob":
+            bits = [s["image"] or "IMAGE MISSING", f"cronjob @ '{s.get('schedule') or '?'}'"]
+        elif wl == "worker":
+            bits = [s["image"] or "IMAGE MISSING", "worker (no Service)", f"{s['replicas']}x"]
+        else:
+            bits = [s["image"] or "IMAGE MISSING", f"port {s['port']}", f"{s['replicas']}x"]
+            if s.get("hpa_enabled"):
+                bits[-1] = f"autoscale {s['hpa_min']}–{s['hpa_max']} @ {s['hpa_cpu']}% CPU"
+            if s.get("ingress_host"):
+                bits.append(f"ingress {s['ingress_host']}")
         if s["volumes"]:
             bits.append(f"{len(s['volumes'])} volume{'s' if len(s['volumes']) != 1 else ''}")
         lines.append(f"  • {s['name']}: {', '.join(bits)}")
@@ -292,9 +321,15 @@ def validate_services(services: list) -> list:
         img = str(s.get("image") or "")
         if not img or img.startswith("-") or any(c.isspace() for c in img):
             raise ValueError(f"service '{name}' has no valid image")
-        port = _int_or_none(s.get("port"))
-        if port is None or not (0 < port < 65536):
-            raise ValueError(f"service '{name}' has no valid port")
+        wl = s.get("workload") or "deployment"
+        if wl not in ("deployment", "worker", "cronjob"):
+            raise ValueError(f"service '{name}' has invalid workload '{wl}'")
+        if wl == "deployment":                      # only a served workload needs a port
+            port = _int_or_none(s.get("port"))
+            if port is None or not (0 < port < 65536):
+                raise ValueError(f"service '{name}' has no valid port")
+        if wl == "cronjob" and not str(s.get("schedule") or "").strip():
+            raise ValueError(f"cronjob '{name}' has no schedule")
     return services
 
 
@@ -344,6 +379,21 @@ if __name__ == "__main__":
                                           "env": {"API_TOKEN": "t"}}]}))
     a = r2["cfg"]["services"][0]
     assert a["secrets"] == {"API_TOKEN": "t"} and a["env"] == {}, a
+
+    # worker: no port required, no ingress/hpa; cronjob: schedule required
+    rw = ingest(json.dumps({"services": [
+        {"name": "mailer", "image": "org/mailer:2", "type": "worker"},
+        {"name": "nightly", "image": "org/backup:2", "type": "cronjob", "schedule": "0 3 * * *"}]}))
+    assert rw["missing"] == [], rw["missing"]                       # worker needs no port
+    mailer = next(s for s in rw["cfg"]["services"] if s["name"] == "mailer")
+    nightly = next(s for s in rw["cfg"]["services"] if s["name"] == "nightly")
+    assert mailer["workload"] == "worker" and mailer["ingress_host"] == "" and mailer["hpa_enabled"] is False
+    assert nightly["workload"] == "cronjob" and nightly["schedule"] == "0 3 * * *"
+    assert "worker (no Service)" in rw["summary"] and "cronjob @" in rw["summary"]
+    validate_services(rw["cfg"]["services"])
+    # cronjob without a schedule -> Missing
+    rc = ingest(json.dumps({"services": [{"name": "j", "image": "j:1", "type": "cronjob"}]}))
+    assert ("j", "schedule") in {(m["service"], m["field"]) for m in rc["missing"]}, rc["missing"]
 
     # missing image + bad port -> reported, not assumed
     r3 = ingest(json.dumps({"services": [{"name": "web", "port": "the-main-one"}]}))

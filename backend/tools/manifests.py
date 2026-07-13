@@ -64,6 +64,29 @@ def build_values(cfg: dict) -> dict:
         r["requests"].update((cfg["resources"].get("requests") or {}))
         r["limits"].update((cfg["resources"].get("limits") or {}))
         values["resources"] = r
+
+    # workload type: deployment (served) | worker (no Service/Ingress) | cronjob (scheduled Job).
+    # A worker/cronjob is NOT reachable, so it gets no Service, Ingress, or HPA; a cronjob is a
+    # Job (no Deployment/PDB either). Default keeps single-service renders identical.
+    workload = cfg.get("workload") or "deployment"
+    if workload not in ("deployment", "worker", "cronjob"):
+        raise ValueError(f"workload must be deployment|worker|cronjob, got {workload!r}")
+    values["workload"] = workload
+    if cfg.get("stop_grace") is not None:
+        values["stopGraceSeconds"] = int(cfg["stop_grace"])
+    if workload != "deployment":
+        values["ingress"]["enabled"] = False
+        values["hpa"]["enabled"] = False
+        # a portless worker/cronjob has nothing to HTTP-probe — don't invent a probe that
+        # would keep it un-ready forever (unless the caller gave an explicit one).
+        if not cfg.get("probe"):
+            values["probe"] = {"type": "none"}
+    if workload == "cronjob":
+        sched = (cfg.get("schedule") or "").strip()
+        if not sched:
+            raise ValueError("a cronjob workload needs a 'schedule' (a cron expression)")
+        values["schedule"] = sched
+        values["pdb"]["enabled"] = False        # a Job has no Deployment to disrupt
     return values
 
 def render(cfg: dict) -> str:
