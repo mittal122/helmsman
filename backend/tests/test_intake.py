@@ -8,11 +8,11 @@ import main
 
 
 def test_build_prompt_is_deterministic_and_self_contained():
-    p = intake.build_prompt({"app_description": "a Rails app"})
-    assert "Rails" in p
-    assert '"services"' in p and "Return ONLY the JSON" in p
+    p = intake.build_prompt()
+    assert '"services"' in p and "Return ONE strict JSON" in p
+    assert "connects_to" in p and "smoke_tests" in p and "HOSTNAME CONTRACTS" in p
     # same input -> same prompt (no LLM, no randomness)
-    assert p == intake.build_prompt({"app_description": "a Rails app"})
+    assert p == intake.build_prompt()
 
 
 def test_ingest_complete_stack_has_no_missing_and_normalizes():
@@ -146,6 +146,39 @@ def test_c2_app_inherits_db_password():
     be2 = next(s for s in r2["cfg"]["services"] if s["name"] == "backend")
     assert be2["secrets"]["DB_PASSWORD"] == "different"             # not overwritten
     assert any("differs from the database's password" in w for w in r2["warnings"])
+
+
+def test_change2_validation_rich_schema():
+    r = intake.ingest(json.dumps({"application": {"name": "app"}, "services": [
+        {"name": "web", "image": "org/web:latest", "port": 80, "published": True,
+         "connects_to": [{"service": "api", "hostname_in_code": "backend", "port": 8000}],
+         "secrets": {"API_KEY": {"value": None, "required_to_boot": True}},
+         "env": {"LOG_LEVEL": {"value": "info", "required_to_boot": False}}},
+        {"name": "api", "image": "org/api:1", "port": 8000, "max_safe_replicas": 1,
+         "replicas": 3, "replica_constraint_reason": "in-memory websocket engine"}]}))
+    errs = " | ".join(r["errors"])
+    assert "must be version-pinned" in errs                       # (i) :latest rejected
+    assert "not a service in this manifest" in errs               # (d) hostname 'backend' != a service
+    assert "max_safe_replicas=1" in errs and "websocket" in errs  # (h) replica safety
+    # (a) empty required secret -> a consolidated question, not a silent deploy
+    assert ("web", "secrets.API_KEY") in {(q["service"], q["field"]) for q in r["missing"]}
+    # rich env flattened for the chart; required-to-boot captured
+    web = next(s for s in r["cfg"]["services"] if s["name"] == "web")
+    assert web["env"]["LOG_LEVEL"] == "info" and web["required_secrets"] == ["API_KEY"]
+
+def test_change2_deploy_gate_rejects_latest_tag():
+    # the strict /deploy gate re-runs the hard errors -> 422 on a hand-crafted POST
+    with pytest.raises(ValueError):
+        intake.validate_services([{"name": "web", "image": "org/web:latest", "port": 80,
+                                   "workload": "deployment"}])
+
+def test_change2_hostname_contract_matches_ok():
+    # when the hostname_in_code equals a real service name, no error
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True,
+         "connects_to": [{"service": "api", "hostname_in_code": "api", "port": 8000}]},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    assert r["errors"] == []
 
 
 def test_ingest_flags_database_missing_password():

@@ -24,6 +24,7 @@ ports, resources, health->probe, named volumes->PVC, replicas, command/args, run
 """
 import json
 import re
+import urllib.parse
 
 import diagnostics
 
@@ -40,110 +41,105 @@ def _k8s_name(s: str) -> str:
 # The exact JSON the developer's AI must return. Kept compact but complete. Every field the
 # coordinator can use is listed so the dev-AI fills it in one shot (never re-questioned).
 _SCHEMA_EXAMPLE = """{
-  "application": { "name": "my-app", "namespace": "default" },
+  "application": { "name": "", "namespace": "" },
   "services": [
     {
-      "name": "web",                        // REQUIRED, lowercase (becomes the K8s name + DNS)
-      "type": "deployment",                 // deployment (served) | worker (background) | cronjob (scheduled)
-      "image": "myorg/web:1.4.2",           // a pre-built image, OR omit it and give "build" below to build from source
-      "build": { "git_repo": "https://github.com/org/web.git", "git_branch": "main", "subdir": "", "dockerfile": "" },
-      "port": 3000,                          // REQUIRED for a deployment (the listen port); omit for worker/cronjob
-      "schedule": "*/5 * * * *",            // cronjob only: cron expression
-      "stop_grace_seconds": 30,             // optional: graceful-shutdown period
-      "extra_ports": [9090],                // other container ports (optional)
-      "replicas": 2,
-      "published": true,                     // true = browser-facing (gets a port-forward)
-      "env": { "APP_ENV": "prod" },         // non-secret config
-      "secrets": { "DB_PASSWORD": "..." },  // sensitive values (redacted everywhere)
-      "command": [],                         // entrypoint override (optional)
-      "args": [],                            // command/args override (optional)
+      "name": "",
+      "type": "deployment | worker | cronjob",
+      "image": "",
+      "port": 0,
+      "schedule": "",
+      "replicas": 1,
+      "max_safe_replicas": 1,
+      "replica_constraint_reason": "",
+      "published": false,
+      "env": { "KEY": { "value": "", "required_to_boot": false } },
+      "secrets": { "KEY": { "value": null, "required_to_boot": true } },
+      "connects_to": [
+        { "service": "", "hostname_in_code": "", "port": 0, "protocol": "" }
+      ],
+      "database_init": { "strategy": "on_startup | init_job | none", "command": [] },
+      "command": [],
+      "args": [],
       "resources": {
-        "requests": { "cpu": "100m", "memory": "128Mi" },
-        "limits":   { "cpu": "500m", "memory": "256Mi" }
+        "requests": { "cpu": "", "memory": "" },
+        "limits": { "cpu": "", "memory": "" }
       },
-      "health": { "type": "http", "path": "/healthz" },  // type: http|tcp|exec|none; exec uses "command": [...]
-      "volumes": [ { "name": "data", "mountPath": "/var/lib/app", "size": "1Gi" } ],
-      "run_as_user": null,                   // numeric UID if the image needs a specific user
-      "ingress": { "host": "app.example.com" },          // browser-facing HTTP host (omit if internal-only)
-      "scaling": { "min": 2, "max": 5, "cpu": 70 },      // CPU-based autoscaling (omit for a fixed replica count)
-      "service_account": { "create": true, "annotations": {}, "rules": [] },  // omit unless the app needs a dedicated SA / cloud identity / k8s API access
-      "depends_on": ["db"]                   // start-order hint (optional)
+      "health": { "type": "http | tcp | exec | none", "path": "", "command": [] },
+      "volumes": [ { "name": "", "mountPath": "", "size": "" } ],
+      "run_as_user": null,
+      "stop_grace_seconds": 30,
+      "needs_outbound_internet": false,
+      "uses_websockets": false,
+      "ingress": { "host": null },
+      "build": { "git_repo": "", "git_branch": "main", "subdir": "", "dockerfile": "" },
+      "depends_on": []
     }
+  ],
+  "smoke_tests": [
+    { "via": "<published service name>", "path": "/", "expect_status": 200, "proves": "UI serves" }
   ]
 }"""
 
+# CHANGE 1 — the "Describe Your Application" prompt, verbatim per the upgrade spec. Deterministic
+# (no LLM). {{BOT_NAME}} is filled by build_prompt.
+_APP_DESC_PROMPT = """You are the AI that built (or fully understands) this application. A
+deployment bot ({{BOT_NAME}}) will deploy it to Kubernetes from prebuilt container images WITHOUT
+reading any code. The bot only consumes the JSON you produce. Answer from your knowledge of the
+codebase — do not guess. If you genuinely do not know a value, use null.
+
+Return ONE strict JSON object (no prose, no comments) in the schema below. Rules you must follow
+while filling it:
+
+1. ARCHITECTURE: include every component that must run (frontend, backend, databases, workers,
+   cron jobs). Do not invent components.
+2. IMAGES: version-pinned tags only, never ":latest". (Or omit "image" and give a "build" spec
+   with the git_repo so the bot builds it from source.)
+3. HOSTNAME CONTRACTS (critical): for every connection one container makes to another, report it
+   in "connects_to" with the EXACT hostname string used inside the code/config (e.g. an nginx
+   proxy_pass host, a DB URL host). The bot names Kubernetes Services to match these hostnames —
+   a mismatch produces a running-but-broken app.
+4. SECRETS: passwords, tokens, API keys, and any URL embedding a password go under "secrets",
+   never "env". A database and every consumer of it must share the same password value. Passwords
+   you generate must be URL-safe (letters/digits only). For each env var, set "required_to_boot"
+   honestly: which missing values crash the app vs. merely disable a feature.
+5. DATABASE INIT: state exactly how the schema gets created ("on_startup" if the image's own
+   start command runs migrations, "init_job" + the command if the bot must run it once, or
+   "none"). An app whose tables are never created deploys green and fails on first query.
+6. REPLICA SAFETY: for each service state "max_safe_replicas" and why. If the service holds
+   in-memory state, singletons, WebSocket engines, or background loops, it is 1 — say so even if
+   it looks stateless.
+7. HEALTH: "http" + path only for web services; databases and non-HTTP services get "tcp" or
+   "exec". Every service that stores data gets a "volumes" entry for its data directory.
+8. USERS: report the numeric UID the image runs as ("run_as_user"). Kubernetes cannot verify
+   named users for runAsNonRoot.
+9. SMOKE TESTS (critical): provide 2-5 HTTP checks that prove the WHOLE app works end-to-end
+   through the browser-facing entrypoint — at least one static/UI path, one API path, and one
+   path that exercises the database. These are the bot's definition of "deployment succeeded";
+   "pods Running" is not success.
+10. Also report: outbound internet needs, WebSocket usage, graceful shutdown seconds, and rough
+    memory appetite (does anything load an ML model or large dataset?).
+
+SCHEMA:
+""" + _SCHEMA_EXAMPLE
+
 
 def build_prompt(context: dict | None = None) -> str:
-    """The copy-paste prompt the developer relays to the AI that built their app. Deterministic
-    — the same request for every app, so no LLM is involved on our side.
-
-    context.containerize=True adds a preamble telling the AI to containerize the app first (write
-    Dockerfiles) when it isn't already, then return the SAME structured JSON. This is the whole
-    point of the developer-as-bridge: we ask the app's own AI ONE prompt and it detects the
-    language/framework/dependencies itself — the human is never asked a technical question."""
+    """The 'Describe Your Application' prompt the developer relays to the AI that built their app.
+    Deterministic (no LLM) — the schema is fixed. context.containerize=True prepends a preamble
+    telling that AI to containerize the app first when it isn't already."""
     c = context or {}
-    app = (c.get("app_description") or "").strip()
-    containerize = bool(c.get("containerize"))
-    L = []
-    L.append("I want to deploy my application to Kubernetes using an automated deployment "
-             "agent. The agent will NOT read my code — it only consumes the structured JSON "
-             "you produce below. You built (or fully understand) this application, so gather "
-             "EVERYTHING needed to deploy it and return it in ONE JSON object.")
-    if app:
-        L.append("")
-        L.append(f"Application: {app}")
-    if containerize:
-        L.append("")
-        L.append("## First — containerize the app if it isn't already")
-        L.append("- Figure out for yourself whether the app is containerized. If it already has "
-                 "working image(s)/Dockerfile(s), skip to the JSON and report them.")
-        L.append("- If it is NOT containerized: detect the architecture and EVERY component that "
-                 "must run, and write a production-grade, multi-stage Dockerfile for each — a "
-                 "minimal pinned base image (never ':latest'), a non-root user, only production "
-                 "dependencies, plus a .dockerignore. Commit these files to the repository.")
-        L.append("- For a component you just wrote a Dockerfile for (and did NOT build & push an "
-                 "image), report it with a \"build\" spec (the git_repo URL and the Dockerfile "
-                 "path) so the platform builds it from source — do not make me build anything.")
-        L.append("- Do NOT ask me any questions. Infer the language, framework, and dependencies "
-                 "from the project yourself.")
-    L.append("")
-    L.append("## Rules")
-    L.append("- For each component, EITHER report a pre-built, version-pinned \"image\" (never "
-             "':latest'), OR give a \"build\" spec (git_repo + optional subdir/dockerfile) to "
-             "build it from source at deploy time.")
-    L.append("- Detect the architecture automatically: include EVERY component that must run "
-             "(frontend, backend, workers, cron jobs, databases, queues, background services). "
-             "One entry in \"services\" per component. Do not invent components that don't exist.")
-    L.append("- Set each service's \"type\": a served app/API/db is \"deployment\"; a background "
-             "worker/queue-consumer is \"worker\" (no port); a scheduled task is \"cronjob\" "
-             "(give its \"schedule\").")
-    L.append("- For each service report: image, the container port, env vars, secrets, health "
-             "check, resource requests/limits, replicas, volumes, and any startup command.")
-    L.append("- If a service is reachable from a browser and needs a public URL, give its "
-             "\"ingress\" host. If it should autoscale on CPU, give \"scaling\" min/max/cpu.")
-    L.append("- Put sensitive values (passwords, tokens, API keys) under \"secrets\", not \"env\". "
-             "A connection string/URL that embeds a password (e.g. DATABASE_URL) is a secret too.")
-    L.append("- CROSS-SERVICE HOSTS: when one service connects to another (app→database, "
-             "app→cache, worker→queue), set its host to the OTHER service's \"name\" — never "
-             "\"localhost\"/\"127.0.0.1\". In Kubernetes each service reaches another by its name "
-             "(e.g. host \"postgres\", port 5432).")
-    L.append("- A database and the app that uses it must share the SAME password value (put it in "
-             "both services' secrets). A database also needs its own init password "
-             "(e.g. POSTGRES_PASSWORD) or it won't start.")
-    L.append("- Health checks: use \"http\" only for web services. A database or other non-HTTP "
-             "service must use \"tcp\" (or \"exec\"), never \"http\".")
-    L.append("- A service that stores data (a database) must have a \"volumes\" entry for its data "
-             "directory, or it loses data and may fail to start.")
-    L.append("- If you genuinely don't know a value, use null — do NOT guess. The agent will "
-             "ask me only for what's missing.")
-    L.append("- Return ONLY the JSON object as STRICT JSON — no prose, and no // comments (the "
-             "notes in the example below are for you; do not include them).")
-    L.append("")
-    L.append("## Return exactly this shape")
-    L.append("```json")
-    L.append(_SCHEMA_EXAMPLE)
-    L.append("```")
-    return "\n".join(L)
+    prompt = _APP_DESC_PROMPT.replace("{{BOT_NAME}}", "Helmsman")
+    if c.get("containerize"):
+        pre = ("## First — containerize the app if it isn't already\n"
+               "- If it already has working image(s)/Dockerfile(s), report them.\n"
+               "- If NOT: detect the architecture and write a production-grade, multi-stage "
+               "Dockerfile for each component (minimal pinned base, non-root, .dockerignore) and "
+               "commit them. Report such a component with a \"build\" spec (git_repo + dockerfile) "
+               "so the bot builds it from source — do not make me build anything.\n"
+               "- Do NOT ask me any questions; infer language/framework/dependencies yourself.\n\n")
+        prompt = pre + prompt
+    return prompt
 
 
 def _norm_probe(health, port) -> dict:
@@ -168,6 +164,22 @@ def _int_or_none(v):
         return int(v)
     except (TypeError, ValueError):
         return None
+
+
+def _norm_kv(d) -> tuple[dict, set]:
+    """Normalize env/secrets that may be rich ({KEY:{value,required_to_boot}}) or flat ({KEY:val}).
+    Returns (flat {KEY:str}, required_keys) — required_keys are those with required_to_boot=true."""
+    flat, required = {}, set()
+    for k, v in (d or {}).items():
+        k = str(k)
+        if isinstance(v, dict) and ("value" in v or "required_to_boot" in v):
+            val = v.get("value")
+            flat[k] = "" if val is None else str(val)
+            if v.get("required_to_boot"):
+                required.add(k)
+        else:
+            flat[k] = "" if v is None else str(v)
+    return flat, required
 
 
 def _norm_service(raw: dict, missing: list, warns: list) -> dict:
@@ -243,12 +255,16 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         missing.append({"service": label, "field": "schedule",
                         "hint": "a cron expression for when to run, e.g. '*/5 * * * *' (every 5 min)"})
 
-    env = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("env") or {}).items()}
-    secrets = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("secrets") or {}).items()}
+    # env/secrets accept BOTH the rich form {KEY:{value,required_to_boot}} and the flat form
+    # {KEY:val} (backward compatible). We flatten for the chart and keep the required-to-boot keys.
+    env, req_env = _norm_kv(raw.get("env"))
+    secrets, req_sec = _norm_kv(raw.get("secrets"))
     # safety net: a credential-looking key left in env gets moved to secrets (redaction).
     for k in list(env):
         if _SECRETISH.search(k):
             secrets[k] = env.pop(k)
+            if k in req_env:
+                req_env.discard(k); req_sec.add(k)
             warns.append(f"{label}: '{k}' looks sensitive — moved to secrets so it stays redacted")
 
     # proactive: a known database image won't start without its init password — ask for it up
@@ -313,6 +329,13 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         warns.append(f"{label}: scaling min {hpa_min} > max {hpa_max} — clamped to max")
         hpa_min = hpa_max
 
+    # new upgrade-spec metadata (used by validation + the new deploy/verify stages)
+    connects_to = [c for c in (raw.get("connects_to") or []) if isinstance(c, dict)]
+    di = raw.get("database_init") if isinstance(raw.get("database_init"), dict) else {}
+    db_init = {"strategy": str(di.get("strategy") or "").strip().lower() or None,
+               "command": [str(x) for x in (di.get("command") or [])]}
+    msr = _int_or_none(raw.get("max_safe_replicas"))
+
     return {
         "name": name,
         "image": image,
@@ -338,6 +361,16 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "stop_grace": _int_or_none(raw.get("stop_grace_seconds")),
         "build": build,                    # None = pre-built image; else build from source
         "service_account": service_account,  # None = default SA; else create SA (+ optional RBAC)
+        # --- upgrade-spec metadata (validation + new stages) ---
+        "required_env": sorted(req_env),
+        "required_secrets": sorted(req_sec),
+        "connects_to": connects_to,
+        "database_init": db_init,
+        "max_safe_replicas": msr,
+        "replica_constraint_reason": str(raw.get("replica_constraint_reason") or "").strip(),
+        "uses_websockets": bool(raw.get("uses_websockets")),
+        "needs_outbound_internet": bool(raw.get("needs_outbound_internet")),
+        "is_db": is_db,
     }
 
 
@@ -458,6 +491,97 @@ def _share_db_password(services: list, warns: list) -> None:
                                  f"match or the app can't log in.")
 
 
+_URLSAFE_PW = re.compile(r"^[A-Za-z0-9_-]*$")
+
+def validate_manifest(services: list, smoke_tests: list, warns: list) -> dict:
+    """CHANGE 2 — reject a manifest with per-field errors BEFORE anything deploys. Returns
+    {errors: [str], questions: [{service,field,hint}]}. `errors` block the deploy; `questions`
+    (null/empty required values) become the ONE consolidated question list for the user."""
+    errors, questions = [], []
+    names = {s["name"] for s in services}
+
+    # DB password per DB service (for rule c: consumer URL password must match)
+    db_pw = {}
+    for s in services:
+        key = diagnostics.db_password_field(s.get("image", ""))
+        if key:
+            db_pw[s.get("name", "")] = str((s.get("secrets") or {}).get(key, ""))
+
+    def q(service, field, hint):
+        questions.append({"service": service, "field": field, "hint": hint})
+
+    for s in services:
+        nm = s.get("name", "")
+        s_env, s_secrets = (s.get("env") or {}), (s.get("secrets") or {})
+        # (a) required env/secret empty or null — check LENGTH, not just presence
+        for k in (s.get("required_secrets") or []):
+            if len(str(s_secrets.get(k, "")).strip()) == 0:
+                q(nm, "secrets." + k, f"{nm} won't boot without secret {k} — provide a value")
+        for k in (s.get("required_env") or []):
+            if len(str(s_env.get(k, "")).strip()) == 0:
+                q(nm, "env." + k, f"{nm} won't boot without env {k} — provide a value")
+        # (i) image tag latest/missing (a build spec is exempt — it produces a pinned tag)
+        img = s.get("image", "")
+        if not s.get("build"):
+            tag = img.rsplit(":", 1)[-1] if ":" in img.split("/")[-1] else ""
+            if not img:
+                errors.append(f"{nm}: no image and no build spec")
+            elif tag in ("", "latest"):
+                errors.append(f"{nm}: image '{img}' must be version-pinned (never ':latest' or untagged)")
+        # (e) a data-storing / non-HTTP service must not use an http probe
+        if (s.get("is_db") or s.get("volumes")) and (s.get("probe") or {}).get("type") == "http":
+            errors.append(f"{nm}: a data-storing service must use a tcp/exec health check, not http")
+        # (f) a data-storing service with no volume (C4 usually auto-adds; this catches the rest)
+        if s.get("is_db") and not s.get("volumes"):
+            q(nm, "volumes", f"{nm} stores data but has no volume — give a data dir + size")
+        # (h) requested replicas exceed the app author's safe maximum -> hard error
+        msr = s.get("max_safe_replicas")
+        if msr is not None and s.get("replicas", 1) > msr:
+            why = f" ({s['replica_constraint_reason']})" if s.get("replica_constraint_reason") else ""
+            errors.append(f"{nm}: requested {s['replicas']} replicas but max_safe_replicas={msr}{why}")
+        # (d) HOSTNAME CONTRACT: every connects_to hostname must be a service name
+        for c in s.get("connects_to", []):
+            host = str(c.get("hostname_in_code") or "").strip()
+            if host and host not in names:
+                errors.append(f"{nm}: connects to host '{host}', which is not a service in this "
+                              f"manifest — rename a service to '{host}' or reconfigure the image; "
+                              f"Kubernetes DNS will not resolve this name.")
+        # (b) a URL with a password: must parse, and the password must be URL-safe
+        for bag, bagd in (("env", s_env), ("secrets", s_secrets)):
+            for k, v in bagd.items():
+                val = str(v)
+                if "://" not in val:
+                    continue
+                try:
+                    u = urllib.parse.urlparse(val)
+                except Exception:
+                    errors.append(f"{nm}: {k} looks like a URL but does not parse")
+                    continue
+                if u.password and not _URLSAFE_PW.match(u.password):
+                    errors.append(f"{nm}: the password embedded in {k} has characters outside "
+                                  f"[A-Za-z0-9_-] — use a URL-safe password or URL-encode it.")
+                # (c) the URL's password must match the target DB's init password
+                tgt = u.hostname or ""
+                if tgt in db_pw and u.password and db_pw[tgt] and u.password != db_pw[tgt]:
+                    errors.append(f"{nm}: the DB password in {k} differs from {tgt}'s init password "
+                                  f"— they must match.")
+        # (g) runAsNonRoot needs a numeric UID; a named/missing user can't be verified
+        if s.get("run_as_user") is None and not s.get("is_db") and not s.get("build"):
+            warns.append(f"{nm}: no numeric run_as_user given — if the image runs as a named user, "
+                         f"Kubernetes' runAsNonRoot check may reject it. Confirm the numeric UID.")
+
+    # (j) smoke tests: must exist and at least one should exercise the database
+    if not smoke_tests:
+        warns.append("no smoke_tests provided — 'pods Running' will be treated as success, which "
+                     "can hide a running-but-broken app. Add 2-5 HTTP checks.")
+    elif not any(re.search(r"(?i)(db|database|query|data|order|user|record|api)", str(t.get("proves", "")) + str(t.get("path", "")))
+                 for t in smoke_tests):
+        warns.append("no smoke_test appears to exercise the database — add one that does a real "
+                     "read/write so a broken DB connection is caught.")
+
+    return {"errors": errors, "questions": questions}
+
+
 def ingest(json_text: str, defaults: dict | None = None) -> dict:
     """Parse the dev-AI's returned JSON -> {cfg, missing, summary, warnings}. cfg is ready for
     /deploy (services[] path). `missing` non-empty means DON'T deploy yet — ask the user only
@@ -505,11 +629,16 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
     _rewire_cross_service(services, warns)   # C1: localhost -> target service name
     _share_db_password(services, warns)      # C2: app inherits the database's password
 
+    smoke_tests = [t for t in (doc.get("smoke_tests") or []) if isinstance(t, dict)]
+    val = validate_manifest(services, smoke_tests, warns)   # CHANGE 2: intake validation
+    missing += val["questions"]              # consolidate nulls/empties into ONE question list
+
     secrets_n = sum(len(s["secrets"]) for s in services)
     vols_n = sum(len(s["volumes"]) for s in services)
     cfg = {"name": app_name, "namespace": ns, "mode": d.get("mode", "manual"),
-           "services": services, "warnings": warns}
-    return {"cfg": cfg, "missing": missing, "warnings": warns,
+           "services": services, "warnings": warns, "smoke_tests": smoke_tests}
+    return {"cfg": cfg, "missing": missing, "errors": val["errors"], "warnings": warns,
+            "smoke_tests": smoke_tests,
             "summary": _summary(app_name, ns, services, secrets_n, vols_n)}
 
 
@@ -541,18 +670,42 @@ def validate_services(services: list) -> list:
                 raise ValueError(f"service '{name}' has no valid port")
         if wl == "cronjob" and not str(s.get("schedule") or "").strip():
             raise ValueError(f"cronjob '{name}' has no schedule")
+    # CHANGE 2 hard errors (latest tag, hostname-contract mismatch, replicas > max_safe, ...):
+    # re-check at the deploy gate so a hand-crafted POST can't skip intake validation.
+    errs = validate_manifest(services, [], [])["errors"]
+    if errs:
+        raise ValueError("; ".join(errs))
     return services
 
 
 if __name__ == "__main__":
-    prompt = build_prompt({"app_description": "a Django API with Postgres"})
-    assert "services" in prompt and "Return ONLY the JSON" in prompt and "Django" in prompt
-    # containerize mode: adds the "containerize first" preamble, still returns the same JSON,
-    # and never asks the human anything.
+    prompt = build_prompt()
+    assert "connects_to" in prompt and "smoke_tests" in prompt and "Return ONE strict JSON" in prompt
+    assert "HOSTNAME CONTRACTS" in prompt and "required_to_boot" in prompt and "Helmsman" in prompt
     cprompt = build_prompt({"containerize": True})
-    assert "containerize the app if it isn't already" in cprompt and "Do NOT ask me any questions" in cprompt
-    assert "services" in cprompt and "build" in cprompt
-    assert "containerize the app" not in build_prompt({})  # plain prompt has no such preamble
+    assert "containerize the app if it isn't already" in cprompt and "connects_to" in cprompt
+    assert "containerize the app" not in build_prompt()
+
+    # CHANGE 2 validation: rich env/secrets, hostname contract, empty required secret, latest tag
+    v = ingest(json.dumps({"application": {"name": "app"}, "services": [
+        {"name": "web", "image": "org/web:latest", "port": 80, "published": True,
+         "connects_to": [{"service": "api", "hostname_in_code": "backend", "port": 8000}],
+         "secrets": {"API_KEY": {"value": None, "required_to_boot": True}}},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    errs = " | ".join(v["errors"])
+    assert "must be version-pinned" in errs                          # (i) latest
+    assert "not a service in this manifest" in errs and "backend" in errs   # (d) hostname mismatch
+    qf = {(q["service"], q["field"]) for q in v["missing"]}
+    assert ("web", "secrets.API_KEY") in qf                          # (a) empty required secret
+    # rich env {value,required_to_boot} flattens for the chart
+    web2 = next(s for s in v["cfg"]["services"] if s["name"] == "web")
+    assert web2["required_secrets"] == ["API_KEY"]
+
+    # replica safety (h) + db http probe (e)
+    v2 = ingest(json.dumps({"services": [
+        {"name": "eng", "image": "org/e:1", "port": 8000, "replicas": 3, "max_safe_replicas": 1,
+         "replica_constraint_reason": "in-memory websocket engine"}]}))
+    assert any("max_safe_replicas=1" in e and "websocket" in e for e in v2["errors"])
 
     # complete two-service stack -> no missing, correct normalization
     good = json.dumps({

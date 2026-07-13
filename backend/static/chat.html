@@ -225,6 +225,14 @@
       var r=bot("Got it 👍  Here's what I understood:\n"+x.d.summary+warn,
         {info:"I read your services, images, ports, environment, storage and settings from that response.", details:true});
       if(r.details){ var ln=el("div","ln",JSON.stringify(x.d.cfg,null,2)); r.details.appendChild(ln); }
+      // hard validation errors block the deploy — the app's AI must fix the manifest and re-send.
+      var errs=x.d.errors||[];
+      if(errs.length){
+        var eb=bot("I can't deploy this yet — these must be fixed in the manifest first:",{cls:"bad"});
+        errs.forEach(function(e){ eb.bubble.appendChild(el("div","ln","✗ "+e)); });
+        eb.bubble.appendChild(el("div","hint","Fix these in the JSON (or ask your app's AI to), then paste the corrected manifest."));
+        return buttons([{label:"Paste corrected manifest →", fn:askPaste},{label:"Start over", cls:"ghost", fn:restart}]);
+      }
       askNextMissing();
     }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:askPaste}]); });
   }
