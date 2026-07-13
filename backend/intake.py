@@ -154,14 +154,32 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
     bld = raw.get("build") if isinstance(raw.get("build"), dict) else None
     build = None
     if bld:
-        build = {
-            "git_repo": str(bld.get("git_repo") or "").strip(),
-            "git_branch": str(bld.get("git_branch") or "").strip(),
-            "git_ref": str(bld.get("git_ref") or "").strip(),
-            "dockerfile": str(bld.get("dockerfile") or "").strip(),
-            "subdir": str(bld.get("context") or bld.get("subdir") or "").strip().lstrip(".").lstrip("/").rstrip("/"),
-        }
-        if not build["git_repo"]:
+        repo = str(bld.get("git_repo") or "").strip()
+        branch = str(bld.get("git_branch") or "").strip()
+        ref = str(bld.get("git_ref") or "").strip()
+        dockerfile = str(bld.get("dockerfile") or "").strip()
+        subdir = str(bld.get("context") or bld.get("subdir") or "").strip()
+        if subdir.startswith("./"):
+            subdir = subdir[2:]
+        subdir = subdir.strip("/")
+        # Untrusted-input hardening (this JSON comes from an external AI): these values become
+        # git/docker argv elements and path components. Reject flag-smuggling (leading '-'),
+        # non-URL repos, and path traversal ('..') here at the trust boundary — the coordinator
+        # Build stage and tools/builder validate again at the point of use (defense in depth).
+        if repo and not (repo.startswith("https://") or repo.startswith("git@")):
+            warns.append(f"{label}: build.git_repo '{repo}' is not a valid URL — treated as missing")
+            repo = ""
+        if branch.startswith("-"):
+            warns.append(f"{label}: build.git_branch can't start with '-' — ignored"); branch = ""
+        if ref.startswith("-"):
+            warns.append(f"{label}: build.git_ref can't start with '-' — ignored"); ref = ""
+        if dockerfile.startswith("-") or ".." in dockerfile or dockerfile.startswith("/"):
+            warns.append(f"{label}: build.dockerfile '{dockerfile}' is unsafe — auto-detecting instead"); dockerfile = ""
+        if ".." in subdir:
+            warns.append(f"{label}: build.subdir '{subdir}' is unsafe — using the repo root"); subdir = ""
+        build = {"git_repo": repo, "git_branch": branch, "git_ref": ref,
+                 "dockerfile": dockerfile, "subdir": subdir}
+        if not repo:
             missing.append({"service": label, "field": "build.git_repo",
                             "hint": "the Git repo URL to build this service from, e.g. https://github.com/org/api.git"})
 

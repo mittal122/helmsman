@@ -456,6 +456,15 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             try:
                 for svc in build_svcs:
                     b = svc["build"]
+                    # defense-in-depth against argv flag-smuggling: reject any value that would
+                    # be read as a flag by git/docker. builder.clone/build also validate at the
+                    # choke point (URL regex, no-leading-dash refs, `--` separator, absolute -f
+                    # path), but this fails fast + clearly at the untrusted-input boundary.
+                    for _fld in ("git_repo", "git_branch", "git_ref", "dockerfile", "subdir"):
+                        if str(b.get(_fld) or "").startswith("-"):
+                            await emit("error", "Build", f"{svc['name']}: build.{_fld} must not start with '-'")
+                            await guide("Build", [f"{svc['name']}: invalid build.{_fld} (leading '-')"])
+                            return
                     own_repo = b.get("git_repo") or ""
                     repo = own_repo or stack_repo
                     if not repo:
@@ -476,7 +485,16 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                     sub = b.get("subdir", "") or ""
                     parts = [p for p in ((stack_subdir if not own_repo else ""), sub) if p]
                     ctxdir = os.path.join(workdir, *parts) if parts else workdir
-                    if ".." in sub or not os.path.isdir(ctxdir):
+                    # path-traversal guard: the resolved build context MUST stay inside the clone.
+                    # `sub` and `stack_subdir` (the latter from a pasted tree URL) could contain
+                    # '..' and escape the workdir, exposing arbitrary host dirs as the build context.
+                    root = os.path.realpath(workdir)
+                    real_ctx = os.path.realpath(ctxdir)
+                    if real_ctx != root and not real_ctx.startswith(root + os.sep):
+                        await emit("error", "Build", f"{svc['name']}: build context escapes the repo (bad subdir '{sub}')")
+                        await guide("Build", [f"{svc['name']}: build context '{sub}' escapes the repository"])
+                        return
+                    if not os.path.isdir(real_ctx):
                         await emit("error", "Build", f"{svc['name']}: build context '{sub}' not found in the repo")
                         await guide("Build", [f"{svc['name']}: build context directory '{sub}' not found"])
                         return

@@ -90,6 +90,22 @@ def test_ingest_build_without_repo_is_missing_and_rejected():
         intake.validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
 
 
+def test_ingest_build_spec_rejects_flag_and_traversal_injection():
+    r = intake.ingest(json.dumps({"services": [{"name": "api", "port": 80, "build": {
+        "git_repo": "-oProxyCommand=touch /tmp/pwn",   # not a URL -> dropped -> Missing
+        "git_branch": "--upload-pack=evil",
+        "git_ref": "-x",
+        "dockerfile": "../../etc/passwd",
+        "subdir": "../../.."}}]}))
+    b = r["cfg"]["services"][0]["build"]
+    assert b["git_repo"] == ""                                    # non-URL repo dropped
+    assert b["git_branch"] == "" and b["git_ref"] == ""           # flag-smuggling refs dropped
+    assert b["dockerfile"] == "" and b["subdir"] == ""            # traversal dropped
+    assert ("api", "build.git_repo") in {(m["service"], m["field"]) for m in r["missing"]}
+    with pytest.raises(ValueError):                              # strict gate still rejects
+        intake.validate_services(r["cfg"]["services"])
+
+
 def test_ingest_cronjob_without_schedule_is_missing():
     r = intake.ingest(json.dumps({"services": [{"name": "j", "image": "j:1", "type": "cronjob"}]}))
     assert ("j", "schedule") in {(m["service"], m["field"]) for m in r["missing"]}
