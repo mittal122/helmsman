@@ -13,7 +13,10 @@ MAX_TOKENS = 2048
 # e.g. NVIDIA NIM (https://integrate.api.nvidia.com/v1). The LLM stays advisory-only either way;
 # nothing it returns is applied without deterministic validation.
 NIM_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1"
-NIM_DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
+# default to a small, fast, always-warm model so it works out of the box; larger models
+# (e.g. meta/llama-3.3-70b-instruct) give better quality but can cold-start slowly on the
+# serverless tier — set NIM_MODEL + a higher NIM_TIMEOUT for those.
+NIM_DEFAULT_MODEL = "meta/llama-3.1-8b-instruct"
 
 _client = None
 
@@ -63,7 +66,8 @@ def _call_openai_compatible(system: str, user: str, base: str, key: str, model: 
     req = urllib.request.Request(base + "/chat/completions", data=body, method="POST",
                                  headers={"Authorization": "Bearer " + key,
                                           "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    timeout = int(os.environ.get("NIM_TIMEOUT", "120"))   # cold-starting big models are slow
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read())
     content = data["choices"][0]["message"]["content"]
     return json.loads(_extract_json(content))
