@@ -20,6 +20,9 @@ spec:
             {{- include "app.labels" . | nindent 12 }}
         spec:
           restartPolicy: OnFailure
+          {{- with .Values.serviceAccount.name }}
+          serviceAccountName: {{ . }}
+          {{- end }}
           {{- with .Values.stopGraceSeconds }}
           terminationGracePeriodSeconds: {{ . }}
           {{- end }}

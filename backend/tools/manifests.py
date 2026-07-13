@@ -87,6 +87,19 @@ def build_values(cfg: dict) -> dict:
             raise ValueError("a cronjob workload needs a 'schedule' (a cron expression)")
         values["schedule"] = sched
         values["pdb"]["enabled"] = False        # a Job has no Deployment to disrupt
+
+    # ServiceAccount + namespaced RBAC (only when requested — default keeps renders identical).
+    sa = cfg.get("service_account") or cfg.get("serviceAccount") or {}
+    if sa:
+        rules = [r for r in (sa.get("rules") or []) if isinstance(r, dict)]
+        create = bool(sa.get("create", True)) or bool(rules)   # RBAC needs a SA to bind
+        name = str(sa.get("name") or "").strip() or ((values["name"]) if (create or rules) else "")
+        values["serviceAccount"] = {
+            "create": create,
+            "name": name,
+            "annotations": {str(k): str(v) for k, v in (sa.get("annotations") or {}).items()},
+            "rules": rules,
+        }
     return values
 
 def render(cfg: dict) -> str:

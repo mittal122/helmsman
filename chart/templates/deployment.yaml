@@ -24,6 +24,9 @@ spec:
       labels:
         {{- include "app.labels" . | nindent 8 }}
     spec:
+      {{- with .Values.serviceAccount.name }}
+      serviceAccountName: {{ . }}
+      {{- end }}
       {{- with .Values.stopGraceSeconds }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}

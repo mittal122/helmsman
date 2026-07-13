@@ -41,3 +41,8 @@ hpa:
 pdb:
   enabled: false
   minAvailable: 1
+serviceAccount:
+  create: false      # create a dedicated ServiceAccount for this workload
+  name: ""           # run the pod under this SA (empty = the namespace default SA)
+  annotations: {}     # e.g. cloud workload identity: eks.amazonaws.com/role-arn, iam.gke.io/gcp-service-account
+  rules: []           # namespaced RBAC rules -> a Role + RoleBinding (only for apps that call the k8s API)

@@ -90,6 +90,23 @@ def test_ingest_build_without_repo_is_missing_and_rejected():
         intake.validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
 
 
+def test_ingest_service_account_and_rbac():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "ctl", "image": "ctl:1", "port": 8080,
+         "service_account": {"create": True,
+                             "annotations": {"iam.gke.io/gcp-service-account": "x@y.iam"},
+                             "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]}]}}]}))
+    sa = r["cfg"]["services"][0]["service_account"]
+    assert sa["create"] and sa["rules"] and "iam.gke.io/gcp-service-account" in sa["annotations"]
+    assert "RBAC+SA" in r["summary"]
+    from tools import manifests
+    y = manifests.render({**r["cfg"]["services"][0], "namespace": "default", "stack": "s"})
+    assert "kind: ServiceAccount" in y and "kind: Role" in y and "kind: RoleBinding" in y
+    assert "serviceAccountName: ctl" in y
+    # never a ClusterRole (blast radius stays in-namespace)
+    assert "kind: ClusterRole" not in y
+
+
 def test_ingest_build_spec_rejects_flag_and_traversal_injection():
     r = intake.ingest(json.dumps({"services": [{"name": "api", "port": 80, "build": {
         "git_repo": "-oProxyCommand=touch /tmp/pwn",   # not a URL -> dropped -> Missing

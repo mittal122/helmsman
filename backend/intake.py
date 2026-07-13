@@ -64,6 +64,7 @@ _SCHEMA_EXAMPLE = """{
       "run_as_user": null,                   // numeric UID if the image needs a specific user
       "ingress": { "host": "app.example.com" },          // browser-facing HTTP host (omit if internal-only)
       "scaling": { "min": 2, "max": 5, "cpu": 70 },      // CPU-based autoscaling (omit for a fixed replica count)
+      "service_account": { "create": true, "annotations": {}, "rules": [] },  // omit unless the app needs a dedicated SA / cloud identity / k8s API access
       "depends_on": ["db"]                   // start-order hint (optional)
     }
   ]
@@ -228,6 +229,22 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
 
     # ingress host (browser-facing) and CPU autoscaling — the chart already renders both from
     # these cfg keys (manifests.build_values), so no chart change is needed.
+    # ServiceAccount + namespaced RBAC — the chart renders a SA (with cloud-workload-identity
+    # annotations) and a namespaced Role/RoleBinding from these. Only namespaced (never cluster).
+    sa_raw = raw.get("service_account") or raw.get("serviceAccount")
+    service_account = None
+    if isinstance(sa_raw, dict):
+        sa_name = str(sa_raw.get("name") or "").strip()
+        if sa_name and not _RFC1123.match(sa_name):
+            warns.append(f"{label}: service_account.name '{sa_name}' isn't a valid name — using the service name")
+            sa_name = ""
+        service_account = {
+            "create": bool(sa_raw.get("create", True)),
+            "name": sa_name,
+            "annotations": {str(k): str(v) for k, v in (sa_raw.get("annotations") or {}).items()},
+            "rules": [r for r in (sa_raw.get("rules") or []) if isinstance(r, dict)],
+        }
+
     ing = raw.get("ingress") if isinstance(raw.get("ingress"), dict) else {}
     ingress_host = str(ing.get("host") or raw.get("ingress_host") or "").strip()
     sc = raw.get("scaling") if isinstance(raw.get("scaling"), dict) else {}
@@ -262,6 +279,7 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "schedule": schedule,
         "stop_grace": _int_or_none(raw.get("stop_grace_seconds")),
         "build": build,                    # None = pre-built image; else build from source
+        "service_account": service_account,  # None = default SA; else create SA (+ optional RBAC)
     }
 
 
@@ -284,6 +302,9 @@ def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
                 bits.append(f"ingress {s['ingress_host']}")
         if s["volumes"]:
             bits.append(f"{len(s['volumes'])} volume{'s' if len(s['volumes']) != 1 else ''}")
+        sa = s.get("service_account")
+        if sa:
+            bits.append("RBAC+SA" if sa.get("rules") else "dedicated SA")
         lines.append(f"  • {s['name']}: {', '.join(bits)}")
     if secrets_n:
         lines.append(f"{secrets_n} secret{'s' if secrets_n != 1 else ''} (redacted).")
@@ -454,6 +475,15 @@ if __name__ == "__main__":
         assert False, "build without git_repo should reject"
     except ValueError:
         pass
+
+    # service account + RBAC -> renders SA (+ Role/RoleBinding), pod runs under it
+    rsa = ingest(json.dumps({"services": [
+        {"name": "ctl", "image": "ctl:1", "port": 8080,
+         "service_account": {"create": True, "annotations": {"iam.gke.io/gcp-service-account": "x@y.iam"},
+                             "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]}]}}]}))
+    sacfg = rsa["cfg"]["services"][0]["service_account"]
+    assert sacfg["create"] and sacfg["rules"] and "iam.gke.io/gcp-service-account" in sacfg["annotations"]
+    assert "RBAC+SA" in rsa["summary"]
 
     # missing image + bad port -> reported, not assumed
     r3 = ingest(json.dumps({"services": [{"name": "web", "port": "the-main-one"}]}))

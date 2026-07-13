@@ -204,6 +204,11 @@
           </div>
           <label class="mini">1 · Copy this prompt to the AI that built your app</label>
           <textarea id="intk-prompt" rows="5" readonly placeholder="click a button above" style="width:100%;font-family:var(--mono);font-size:.75rem"></textarea>
+          <div class="mini" style="margin-top:6px;color:var(--faint)">Built a single image and just want to ship it? Bring the image name back:</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:2px">
+            <input id="intk-image" placeholder="image you built, e.g. myorg/app:1.0" style="flex:1">
+            <button class="btn" id="intk-use-image" type="button">Use this image →</button>
+          </div>
           <label class="mini" style="margin-top:6px">2 · Paste the JSON it returns</label>
           <textarea id="intk-resp" rows="5" placeholder='{ "services": [ { "name": "web", "image": "org/web:1.2.3", "port": 3000 } ] }' style="width:100%;font-family:var(--mono);font-size:.75rem"></textarea>
           <div class="fbtns" style="margin-top:6px"><button class="btn" id="intk-ingest" type="button">Read response</button></div>
@@ -546,6 +551,16 @@
   $("intk-no").onclick=function(){$("intk-prompt").value="loading…";
     fetch("/onboard",{method:"POST",headers:authHeaders(),body:JSON.stringify({app_description:$("ob-desc").value})})
     .then(function(r){return r.json();}).then(function(d){$("intk-prompt").value=(d.containerization_prompt||JSON.stringify(d,null,2))+"\n\n— once the image is built, click 'Yes' above and paste its JSON response below.";}).catch(function(e){$("intk-prompt").value="unavailable: "+e;});};
+  $("intk-use-image").onclick=function(){
+    // onboarding round-trip closed: the image the user built flows straight into the deploy form.
+    var img=$("intk-image").value.trim();
+    if(!img){$("intk-summary").textContent="Enter the image name you built first.";return;}
+    document.querySelector('[name=image]').value=img;
+    document.querySelector('[name=git_repo]').value="";
+    $("formwrap").open=true;$("intake-wrap").open=false;
+    $("intk-summary").textContent="";
+    document.querySelector('[name=image]').scrollIntoView({behavior:"smooth",block:"center"});
+    setStatus("idle","image set — check name/port, then Deploy");};
   $("intk-ingest").onclick=function(){
     $("intk-summary").textContent="reading…";$("intk-missing").textContent="";$("intk-deploy-row").style.display="none";intakeCfg=null;
     fetch("/intake/ingest",{method:"POST",headers:authHeaders(),body:JSON.stringify({response:$("intk-resp").value,name:val("name"),namespace:val("namespace")||"default",mode:mode})})
