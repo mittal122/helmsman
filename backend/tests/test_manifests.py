@@ -80,3 +80,20 @@ def test_render_exec_probe_from_healthcheck():
     out = manifests.render({"name": "db", "image": "postgres:16", "port": 5432,
                             "probe": {"type": "exec", "command": ["pg_isready", "-U", "postgres"]}})
     assert "exec:" in out and "pg_isready" in out
+
+def test_db_init_renders_initcontainer():
+    from tools import manifests
+    y = manifests.render({"name": "api", "image": "org/api:1", "port": 8000,
+                          "env": {"A": "1"}, "secrets": {"S": "x"},
+                          "database_init": {"strategy": "init_job", "command": ["python", "migrate.py"]}})
+    assert "initContainers:" in y and "api-db-init" in y and "migrate.py" in y
+    # on_startup / none -> no initContainer
+    y2 = manifests.render({"name": "api", "image": "org/api:1", "port": 8000,
+                           "database_init": {"strategy": "on_startup", "command": []}})
+    assert "initContainers:" not in y2
+
+def test_websockets_adds_ingress_timeouts():
+    from tools import manifests
+    y = manifests.render({"name": "w", "image": "w:1", "port": 80,
+                          "ingress_host": "x.example.com", "uses_websockets": True})
+    assert "proxy-read-timeout" in y

@@ -88,6 +88,17 @@ def build_values(cfg: dict) -> dict:
         values["schedule"] = sched
         values["pdb"]["enabled"] = False        # a Job has no Deployment to disrupt
 
+    # database_init strategy == init_job -> run the migration command as an initContainer (same
+    # image + env/secrets as the app) so the schema is created BEFORE the app serves. (Idiomatic
+    # K8s alternative to a standalone Job: gated automatically, no separate orchestration.)
+    di = cfg.get("database_init") or {}
+    if di.get("strategy") == "init_job" and di.get("command"):
+        values["dbInitCommand"] = [str(x) for x in di["command"]]
+
+    # websockets behind an ingress -> longer read/send timeouts + connection upgrade.
+    if cfg.get("uses_websockets"):
+        values["websockets"] = True
+
     # ServiceAccount + namespaced RBAC (only when requested — default keeps renders identical).
     sa = cfg.get("service_account") or cfg.get("serviceAccount") or {}
     if sa:

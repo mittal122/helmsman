@@ -6,6 +6,8 @@ probePath: /
 workload: deployment   # deployment (served) | worker (no Service/Ingress) | cronjob (scheduled)
 schedule: ""           # cronjob only: a cron expression, e.g. "*/5 * * * *"
 stopGraceSeconds: null # terminationGracePeriodSeconds (graceful shutdown); null = k8s default (30)
+dbInitCommand: []      # database_init init_job: migration command run as an initContainer before the app
+websockets: false      # true = add WebSocket-friendly ingress timeouts
 # multi-service (compose) extras — all optional, defaults keep single-service renders identical
 command: []          # container command (compose entrypoint)
 args: []             # container args (compose command)

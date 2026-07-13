@@ -42,6 +42,32 @@ spec:
         {{- end }}
         seccompProfile:
           type: RuntimeDefault
+      {{- with .Values.dbInitCommand }}
+      # database_init: run migrations with the app image + env/secrets before the app serves.
+      initContainers:
+        - name: {{ $.Values.name }}-db-init
+          image: {{ $.Values.image | quote }}
+          command:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          envFrom:
+{{- if $.Values.env }}
+            - configMapRef:
+                name: {{ $.Values.name }}-config
+{{- end }}
+{{- if $.Values.secrets }}
+            - secretRef:
+                name: {{ $.Values.name }}-secret
+{{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ not $.Values.writableRoot }}
+            {{- if $.Values.dropCapabilities }}
+            capabilities:
+              drop: ["ALL"]
+            {{- end }}
+      {{- end }}
       containers:
         - name: {{ .Values.name }}
           image: {{ .Values.image | quote }}

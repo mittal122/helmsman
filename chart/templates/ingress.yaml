@@ -5,6 +5,12 @@ metadata:
   name: {{ .Values.name }}
   labels:
     {{- include "app.labels" . | nindent 4 }}
+  {{- if .Values.websockets }}
+  annotations:
+    # WebSocket support: long-lived upgraded connections need generous timeouts (nginx ingress).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  {{- end }}
 spec:
   rules:
     - host: {{ .Values.ingress.host | quote }}
