@@ -430,6 +430,16 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             await guide("Detect", [f"connection to {target} failed: {detail}"])
             return
         await emit("info", "Detect", f"Cluster reachable ({detail})")
+        # per-service capability downgrade: an Ingress with no controller / an HPA with no
+        # metrics-server would silently not work — detect, warn, and skip (edge cases §13).
+        caps = await asyncio.to_thread(deploy.detect_capabilities)
+        for svc in services:
+            if svc.get("ingress_host") and not caps["ingress_controller"]:
+                await emit("info", "Detect", f"{svc['name']}: no ingress controller — skipping Ingress, use port-forward")
+                svc["ingress_host"] = ""
+            if svc.get("hpa_enabled") and not caps["metrics_server"]:
+                await emit("info", "Detect", f"{svc['name']}: no metrics-server — skipping HPA")
+                svc["hpa_enabled"] = False
         await emit("stage_exit", "Detect", "Ready")
 
         # Approve (once, whole stack)

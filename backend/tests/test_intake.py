@@ -39,6 +39,26 @@ def test_ingest_complete_stack_has_no_missing_and_normalizes():
     intake.validate_services(r["cfg"]["services"])              # complete -> passes strict gate
 
 
+def test_ingest_maps_ingress_and_scaling_to_chart_keys():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "web", "image": "nginx:1.27", "port": 80,
+         "ingress": {"host": "shop.example.com"}, "scaling": {"min": 2, "max": 6, "cpu": 70}}]}))
+    w = r["cfg"]["services"][0]
+    assert w["ingress_host"] == "shop.example.com"
+    assert w["hpa_enabled"] and w["hpa_min"] == 2 and w["hpa_max"] == 6 and w["hpa_cpu"] == 70
+    # renders real Ingress + HPA from those keys (no chart change)
+    from tools import manifests
+    y = manifests.render({**w, "namespace": "default", "stack": "shop"})
+    assert "kind: Ingress" in y and "HorizontalPodAutoscaler" in y
+    assert 'host: "shop.example.com"' in y and "averageUtilization: 70" in y
+
+
+def test_ingest_no_scaling_block_leaves_hpa_off():
+    r = intake.ingest(json.dumps({"services": [{"name": "db", "image": "postgres:16", "port": 5432}]}))
+    assert r["cfg"]["services"][0]["hpa_enabled"] is False
+    assert r["cfg"]["services"][0]["ingress_host"] == ""
+
+
 def test_ingest_reports_missing_without_assuming():
     r = intake.ingest(json.dumps({"services": [{"name": "web", "port": "nope"}]}))
     fields = {(m["service"], m["field"]) for m in r["missing"]}

@@ -5,7 +5,11 @@ metadata:
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.hpa.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- else }}
+  # replicas omitted on purpose: the HPA owns the replica count (hardcoding it fights the HPA)
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:

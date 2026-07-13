@@ -58,6 +58,8 @@ _SCHEMA_EXAMPLE = """{
       "health": { "type": "http", "path": "/healthz" },  // type: http|tcp|exec|none; exec uses "command": [...]
       "volumes": [ { "name": "data", "mountPath": "/var/lib/app", "size": "1Gi" } ],
       "run_as_user": null,                   // numeric UID if the image needs a specific user
+      "ingress": { "host": "app.example.com" },          // browser-facing HTTP host (omit if internal-only)
+      "scaling": { "min": 2, "max": 5, "cpu": 70 },      // CPU-based autoscaling (omit for a fixed replica count)
       "depends_on": ["db"]                   // start-order hint (optional)
     }
   ]
@@ -86,6 +88,8 @@ def build_prompt(context: dict | None = None) -> str:
              "One entry in \"services\" per component. Do not invent components that don't exist.")
     L.append("- For each service report: image, the container port, env vars, secrets, health "
              "check, resource requests/limits, replicas, volumes, and any startup command.")
+    L.append("- If a service is reachable from a browser and needs a public URL, give its "
+             "\"ingress\" host. If it should autoscale on CPU, give \"scaling\" min/max/cpu.")
     L.append("- Put sensitive values (passwords, tokens, API keys) under \"secrets\", not \"env\".")
     L.append("- If you genuinely don't know a value, use null — do NOT guess. The agent will "
              "ask me only for what's missing.")
@@ -167,6 +171,18 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
             volumes.append({"name": _k8s_name(v.get("name") or "data"),
                             "mountPath": str(v["mountPath"]), "size": str(v.get("size") or "1Gi")})
 
+    # ingress host (browser-facing) and CPU autoscaling — the chart already renders both from
+    # these cfg keys (manifests.build_values), so no chart change is needed.
+    ing = raw.get("ingress") if isinstance(raw.get("ingress"), dict) else {}
+    ingress_host = str(ing.get("host") or raw.get("ingress_host") or "").strip()
+    sc = raw.get("scaling") if isinstance(raw.get("scaling"), dict) else {}
+    hpa_min = _int_or_none(sc.get("min"))
+    hpa_max = _int_or_none(sc.get("max"))
+    hpa_on = bool(sc) and (hpa_max or 0) > 0
+    if hpa_on and hpa_min and hpa_max and hpa_min > hpa_max:
+        warns.append(f"{label}: scaling min {hpa_min} > max {hpa_max} — clamped to max")
+        hpa_min = hpa_max
+
     return {
         "name": name,
         "image": image,
@@ -182,6 +198,11 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "volumes": volumes,
         "run_as_user": _int_or_none(raw.get("run_as_user")),
         "published": bool(raw.get("published", True)),
+        "ingress_host": ingress_host,
+        "hpa_enabled": hpa_on,
+        "hpa_min": hpa_min or 2,
+        "hpa_max": hpa_max or 5,
+        "hpa_cpu": _int_or_none(sc.get("cpu")) or 80,
     }
 
 
@@ -190,6 +211,10 @@ def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
              f"{'s' if len(services) != 1 else ''}:"]
     for s in services:
         bits = [s["image"] or "IMAGE MISSING", f"port {s['port']}", f"{s['replicas']}x"]
+        if s.get("hpa_enabled"):
+            bits[-1] = f"autoscale {s['hpa_min']}–{s['hpa_max']} @ {s['hpa_cpu']}% CPU"
+        if s.get("ingress_host"):
+            bits.append(f"ingress {s['ingress_host']}")
         if s["volumes"]:
             bits.append(f"{len(s['volumes'])} volume{'s' if len(s['volumes']) != 1 else ''}")
         lines.append(f"  • {s['name']}: {', '.join(bits)}")
@@ -302,6 +327,17 @@ if __name__ == "__main__":
     assert db["env"] == {} and db["secrets"] == {"POSTGRES_PASSWORD": "pw"}  # secret auto-classified out of env
     assert db["volumes"][0]["size"] == "2Gi"
     validate_services(r["cfg"]["services"])                                  # passes the strict gate
+
+    # ingress + scaling map to the chart's cfg keys (no chart change needed)
+    ri = ingest(json.dumps({"services": [
+        {"name": "web", "image": "w:1", "port": 80,
+         "ingress": {"host": "shop.example.com"}, "scaling": {"min": 3, "max": 8, "cpu": 65}}]}))
+    w = ri["cfg"]["services"][0]
+    assert w["ingress_host"] == "shop.example.com"
+    assert w["hpa_enabled"] and w["hpa_min"] == 3 and w["hpa_max"] == 8 and w["hpa_cpu"] == 65
+    assert "ingress shop.example.com" in ri["summary"] and "autoscale 3–8" in ri["summary"]
+    # no scaling block -> hpa off, no ingress
+    assert db["hpa_enabled"] is False and db["ingress_host"] == ""
 
     # a credential left in env is moved to secrets
     r2 = ingest(json.dumps({"services": [{"name": "a", "image": "a:1", "port": 8080,
