@@ -95,6 +95,7 @@ class DeployRequest(BaseModel):
     compose_path: str = "" # or read the compose file at this path inside git_repo
     compose_env: dict[str, str] = {}  # values for ${VAR} interpolation in the compose file (e.g. TAG, POSTGRES_PASSWORD)
     services: list[dict] = []  # structured-intake path: pre-normalized per-service cfgs (from POST /intake/ingest)
+    smoke_tests: list[dict] = []  # CHANGE 4: app-author HTTP checks — deploy succeeds only if they pass
     allow_vulnerable: bool = False  # operator override: proceed even if the image scan gate finds CRITICAL/HIGH vulns
 
     @field_validator("compose_path")
