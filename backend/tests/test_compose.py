@@ -28,9 +28,12 @@ def test_no_healthcheck_with_port_gets_tcp_probe():
     svcs, _ = compose.parse("services:\n  cache:\n    image: redis:7\n    ports: ['6379']\n")
     assert svcs[0]["probe"] == {"type": "tcp"}
 
-def test_build_only_service_is_rejected():
-    with pytest.raises(ValueError):
-        compose.parse("services:\n  api:\n    build: ./api\n")
+def test_build_service_produces_build_spec():
+    svcs, _ = compose.parse("services:\n  api:\n    build: ./api\n    ports: ['8000:8000']\n")
+    assert svcs[0]["image"] == "" and svcs[0]["build"]["subdir"] == "api"
+    # long form with an explicit dockerfile keeps root context
+    b2, _ = compose.parse("services:\n  api:\n    build:\n      context: .\n      dockerfile: api/Dockerfile\n    ports: ['80']\n")
+    assert b2[0]["build"]["dockerfile"] == "api/Dockerfile" and b2[0]["build"]["subdir"] == ""
 
 def test_depends_on_cycle_rejected():
     with pytest.raises(ValueError):

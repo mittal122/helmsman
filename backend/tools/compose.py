@@ -212,6 +212,20 @@ def _volumes(svc: dict, warns: list, name: str) -> list:
     return out
 
 
+def _build_spec(b) -> dict:
+    """compose build: -> a normalized build spec. String form is the context dir; long form is
+    {context, dockerfile}. git_repo is empty = inherit the stack's repo (a compose monorepo)."""
+    if isinstance(b, dict):
+        subdir = str(b.get("context") or "").strip()
+        dockerfile = str(b.get("dockerfile") or "").strip()
+    else:
+        subdir, dockerfile = str(b or "").strip(), ""
+    subdir = subdir.lstrip(".").lstrip("/").rstrip("/")   # "./api/" -> "api"
+    if ".." in subdir or ".." in dockerfile or dockerfile.startswith("/"):
+        raise ValueError(f"invalid build path '{b}'")
+    return {"git_repo": "", "git_branch": "", "git_ref": "", "subdir": subdir, "dockerfile": dockerfile}
+
+
 def _topo_order(names: list, deps: dict) -> list:
     """Return service names in depends_on order (dependencies first). Cycle -> ValueError."""
     order, temp, perm = [], set(), set()
@@ -268,13 +282,17 @@ def parse(yaml_text: str, env: dict | None = None) -> tuple[list, list]:
         svc = svcmap[name] or {}
         if not _RFC1123.match(name):
             raise ValueError(f"service name '{name}' is not a valid Kubernetes name (RFC1123: lowercase alnum + '-')")
-        if not svc.get("image"):
+        # a service ships EITHER a pre-built image OR a build: spec (built from source at
+        # deploy time). The build context is a subdir of the SAME repo the stack is deployed
+        # from (git_repo inherited by the coordinator's Build stage).
+        build = None
+        img = str(svc.get("image") or "")
+        if not img:
             if svc.get("build") is not None:
-                raise ValueError(f"service '{name}' uses build: — v1 needs a pre-built image. "
-                                 f"Build and load/push it, then set image: for this service.")
-            raise ValueError(f"service '{name}' has no image")
-        img = str(svc["image"])
-        if img.startswith("-") or any(c.isspace() for c in img):
+                build = _build_spec(svc["build"])
+            else:
+                raise ValueError(f"service '{name}' has no image (and no build: to build one)")
+        elif img.startswith("-") or any(c.isspace() for c in img):
             raise ValueError(f"service '{name}' has an invalid image reference")
 
         ports = [p for p in (_container_port(x) for x in (svc.get("ports") or [])) if p]
@@ -323,6 +341,7 @@ def parse(yaml_text: str, env: dict | None = None) -> tuple[list, list]:
             "volumes": _volumes(svc, warns, name),
             "run_as_user": run_as_user,
             "published": bool(ports),          # had a ports: mapping -> browser-facing -> port-forward it
+            "build": build,                    # None = pre-built image; else a from-source spec
         }
         services.append(cfg)
 
@@ -375,12 +394,16 @@ networks:
     assert db["secrets"] == {"POSTGRES_PASSWORD": "pw"}, db["secrets"]
     assert any("networks" in x for x in w) and any("bind/anonymous" in x for x in w), w
     assert any("restart" in x for x in w), w
-    # build-only service is a hard error
-    try:
-        parse("services:\n  x:\n    build: .\n")
-        assert False, "build-only should raise"
-    except ValueError:
-        pass
+    # a build: service now produces a build spec (built from source at deploy time)
+    bsvcs, _ = parse("services:\n  api:\n    build: ./api\n    ports: ['8000:8000']\n")
+    assert bsvcs[0]["build"] == {"git_repo": "", "git_branch": "", "git_ref": "", "subdir": "api", "dockerfile": ""}, bsvcs[0]["build"]
+    assert bsvcs[0]["image"] == "", bsvcs[0]
+    # long-form build with an explicit dockerfile
+    b2, _ = parse("services:\n  api:\n    build:\n      context: .\n      dockerfile: api/Dockerfile\n    ports: ['80']\n")
+    assert b2[0]["build"]["dockerfile"] == "api/Dockerfile" and b2[0]["build"]["subdir"] == "", b2[0]["build"]
+    # a pre-built image still has build=None
+    p, _ = parse("services:\n  web:\n    image: nginx:1.27\n")
+    assert p[0]["build"] is None, p[0]
     # cycle
     try:
         parse("services:\n  a:\n    image: i\n    depends_on: [b]\n  b:\n    image: i\n    depends_on: [a]\n")

@@ -43,7 +43,8 @@ _SCHEMA_EXAMPLE = """{
     {
       "name": "web",                        // REQUIRED, lowercase (becomes the K8s name + DNS)
       "type": "deployment",                 // deployment (served) | worker (background) | cronjob (scheduled)
-      "image": "myorg/web:1.4.2",           // REQUIRED, pre-built + version-pinned (never :latest)
+      "image": "myorg/web:1.4.2",           // a pre-built image, OR omit it and give "build" below to build from source
+      "build": { "git_repo": "https://github.com/org/web.git", "git_branch": "main", "subdir": "", "dockerfile": "" },
       "port": 3000,                          // REQUIRED for a deployment (the listen port); omit for worker/cronjob
       "schedule": "*/5 * * * *",            // cronjob only: cron expression
       "stop_grace_seconds": 30,             // optional: graceful-shutdown period
@@ -84,8 +85,9 @@ def build_prompt(context: dict | None = None) -> str:
         L.append(f"Application: {app}")
     L.append("")
     L.append("## Rules")
-    L.append("- The app is already containerized. Report the pre-built, version-pinned image "
-             "for each component (never ':latest').")
+    L.append("- For each component, EITHER report a pre-built, version-pinned \"image\" (never "
+             "':latest'), OR give a \"build\" spec (git_repo + optional subdir/dockerfile) to "
+             "build it from source at deploy time.")
     L.append("- Detect the architecture automatically: include EVERY component that must run "
              "(frontend, backend, workers, cron jobs, databases, queues, background services). "
              "One entry in \"services\" per component. Do not invent components that don't exist.")
@@ -148,11 +150,26 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         wl = "deployment"
     served = wl == "deployment"
 
+    # a service ships a pre-built image OR a build spec (built from source at deploy time).
+    bld = raw.get("build") if isinstance(raw.get("build"), dict) else None
+    build = None
+    if bld:
+        build = {
+            "git_repo": str(bld.get("git_repo") or "").strip(),
+            "git_branch": str(bld.get("git_branch") or "").strip(),
+            "git_ref": str(bld.get("git_ref") or "").strip(),
+            "dockerfile": str(bld.get("dockerfile") or "").strip(),
+            "subdir": str(bld.get("context") or bld.get("subdir") or "").strip().lstrip(".").lstrip("/").rstrip("/"),
+        }
+        if not build["git_repo"]:
+            missing.append({"service": label, "field": "build.git_repo",
+                            "hint": "the Git repo URL to build this service from, e.g. https://github.com/org/api.git"})
+
     image = str(raw.get("image") or "").strip()
-    if not image:
+    if not image and not build:
         missing.append({"service": label, "field": "image",
-                        "hint": "the pre-built, version-pinned container image, e.g. myorg/web:1.4.2"})
-    elif image.startswith("-") or any(ch.isspace() for ch in image):
+                        "hint": "a pre-built image (e.g. myorg/web:1.4.2) OR a \"build\": {git_repo} spec"})
+    elif image and (image.startswith("-") or any(ch.isspace() for ch in image)):
         warns.append(f"{label}: image '{image}' is not a valid reference — treated as missing")
         missing.append({"service": label, "field": "image", "hint": "a valid image reference"})
         image = ""
@@ -226,6 +243,7 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "workload": wl,
         "schedule": schedule,
         "stop_grace": _int_or_none(raw.get("stop_grace_seconds")),
+        "build": build,                    # None = pre-built image; else build from source
     }
 
 
@@ -234,12 +252,14 @@ def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
              f"{'s' if len(services) != 1 else ''}:"]
     for s in services:
         wl = s.get("workload", "deployment")
+        src = s["image"] if s["image"] else (
+            "build ← " + (s["build"]["git_repo"] or "stack repo") if s.get("build") else "IMAGE MISSING")
         if wl == "cronjob":
-            bits = [s["image"] or "IMAGE MISSING", f"cronjob @ '{s.get('schedule') or '?'}'"]
+            bits = [src, f"cronjob @ '{s.get('schedule') or '?'}'"]
         elif wl == "worker":
-            bits = [s["image"] or "IMAGE MISSING", "worker (no Service)", f"{s['replicas']}x"]
+            bits = [src, "worker (no Service)", f"{s['replicas']}x"]
         else:
-            bits = [s["image"] or "IMAGE MISSING", f"port {s['port']}", f"{s['replicas']}x"]
+            bits = [src, f"port {s['port']}", f"{s['replicas']}x"]
             if s.get("hpa_enabled"):
                 bits[-1] = f"autoscale {s['hpa_min']}–{s['hpa_max']} @ {s['hpa_cpu']}% CPU"
             if s.get("ingress_host"):
@@ -319,8 +339,12 @@ def validate_services(services: list) -> list:
         if not _RFC1123.match(name):
             raise ValueError(f"service name '{name}' is not a valid Kubernetes name")
         img = str(s.get("image") or "")
-        if not img or img.startswith("-") or any(c.isspace() for c in img):
-            raise ValueError(f"service '{name}' has no valid image")
+        bld = s.get("build") if isinstance(s.get("build"), dict) else None
+        if bld:
+            if not str(bld.get("git_repo") or "").strip():
+                raise ValueError(f"service '{name}' build has no git_repo")
+        elif not img or img.startswith("-") or any(c.isspace() for c in img):
+            raise ValueError(f"service '{name}' has no valid image or build")
         wl = s.get("workload") or "deployment"
         if wl not in ("deployment", "worker", "cronjob"):
             raise ValueError(f"service '{name}' has invalid workload '{wl}'")
@@ -394,6 +418,24 @@ if __name__ == "__main__":
     # cronjob without a schedule -> Missing
     rc = ingest(json.dumps({"services": [{"name": "j", "image": "j:1", "type": "cronjob"}]}))
     assert ("j", "schedule") in {(m["service"], m["field"]) for m in rc["missing"]}, rc["missing"]
+
+    # build-from-source: no image needed; git_repo required
+    rb = ingest(json.dumps({"services": [
+        {"name": "api", "port": 8000, "build": {"git_repo": "https://github.com/org/api.git", "subdir": "api"}}]}))
+    assert rb["missing"] == [], rb["missing"]
+    api = rb["cfg"]["services"][0]
+    assert api["image"] == "" and api["build"]["git_repo"] == "https://github.com/org/api.git"
+    assert api["build"]["subdir"] == "api"
+    assert "build ← https://github.com/org/api.git" in rb["summary"]
+    validate_services(rb["cfg"]["services"])
+    # build spec without git_repo -> Missing, and strict gate rejects it
+    rb2 = ingest(json.dumps({"services": [{"name": "api", "port": 80, "build": {"subdir": "api"}}]}))
+    assert ("api", "build.git_repo") in {(m["service"], m["field"]) for m in rb2["missing"]}
+    try:
+        validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
+        assert False, "build without git_repo should reject"
+    except ValueError:
+        pass
 
     # missing image + bad port -> reported, not assumed
     r3 = ingest(json.dumps({"services": [{"name": "web", "port": "the-main-one"}]}))

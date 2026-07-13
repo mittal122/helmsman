@@ -238,6 +238,12 @@ async def deploy(req: DeployRequest):
             services, warnings = compose.parse(text, req.compose_env)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=f"compose parse error: {e}")
+        # a build: service needs a repo to build from — inherited from the stack's git_repo.
+        # A pasted compose (no git_repo) with build: can't build, so reject it early and clearly.
+        if any(s.get("build") for s in services) and not cfg.get("git_repo"):
+            raise HTTPException(status_code=422,
+                detail="a build: service needs the stack deployed from a Git repo — set git_repo, "
+                       "or give each service a pre-built image:")
         cfg["services"], cfg["warnings"] = services, warnings
         src = f"compose={len(services)} services"
     elif req.services:

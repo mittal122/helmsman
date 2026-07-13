@@ -442,6 +442,78 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 svc["hpa_enabled"] = False
         await emit("stage_exit", "Detect", "Ready")
 
+        # Build (per-service, from source) — services carrying a build spec instead of a pre-built
+        # image. Clone each distinct repo ONCE (a monorepo shared by several services), build each
+        # service's Dockerfile with its own build context, load the image into the cluster, and
+        # fill svc["image"] so Generate/Approve see the real tag. Same builder as the single path.
+        build_svcs = [s for s in services if s.get("build")]
+        if build_svcs:
+            stack_repo = cfg.get("git_repo", "")
+            stack_subdir = cfg.get("git_subdir", "") or ""
+            await emit("stage_enter", "Build", f"Building {len(build_svcs)} service(s) from source")
+            kctx = await asyncio.to_thread(builder.current_context)
+            clones: dict = {}   # (repo,branch,ref) -> (workdir, sha)
+            try:
+                for svc in build_svcs:
+                    b = svc["build"]
+                    own_repo = b.get("git_repo") or ""
+                    repo = own_repo or stack_repo
+                    if not repo:
+                        await emit("error", "Build",
+                                   f"{svc['name']}: build service has no git_repo and the stack wasn't deployed from a repo")
+                        await guide("Build", [f"{svc['name']}: source build has no git repository to build from"])
+                        return
+                    branch, ref = b.get("git_branch", ""), b.get("git_ref", "")
+                    key = (repo, branch, ref)
+                    if key not in clones:
+                        safe = builder.display_url(builder.normalize_repo_url(repo)[0])
+                        await emit("command", "Build",
+                                   f"git clone --depth 1 {('-b ' + branch + ' ') if branch else ''}{safe}")
+                        clones[key] = await asyncio.to_thread(builder.clone, repo, branch, ref)
+                    workdir, sha = clones[key]
+                    # build context = repo/[stack_subdir/]svc_subdir. stack_subdir only applies when
+                    # the service inherits the stack repo (a compose file that lived in a subfolder).
+                    sub = b.get("subdir", "") or ""
+                    parts = [p for p in ((stack_subdir if not own_repo else ""), sub) if p]
+                    ctxdir = os.path.join(workdir, *parts) if parts else workdir
+                    if ".." in sub or not os.path.isdir(ctxdir):
+                        await emit("error", "Build", f"{svc['name']}: build context '{sub}' not found in the repo")
+                        await guide("Build", [f"{svc['name']}: build context directory '{sub}' not found"])
+                        return
+                    dockerfile = b.get("dockerfile", "") or ""
+                    if not dockerfile:
+                        found = await asyncio.to_thread(builder.list_dockerfiles, ctxdir)
+                        if "Dockerfile" in found:
+                            dockerfile = "Dockerfile"
+                        elif len(found) == 1:
+                            dockerfile = found[0]
+                            await emit("info", "Build", f"{svc['name']}: auto-detected {dockerfile}")
+                        elif not found:
+                            await emit("error", "Build", f"{svc['name']}: no Dockerfile found in the build context")
+                            await guide("Build", [f"{svc['name']}: Dockerfile not found in the build context"])
+                            return
+                        else:
+                            listing = ", ".join(found)
+                            await emit("error", "Build",
+                                       f"{svc['name']}: multiple Dockerfiles — set build.dockerfile: {listing}",
+                                       {"dockerfiles": found})
+                            await guide("Build", [f"{svc['name']}: multiple Dockerfiles found: {listing}"])
+                            return
+                    tag = builder.image_tag(f"{stack}-{svc['name']}", sha)
+                    await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} .")
+                    await asyncio.to_thread(builder.build, ctxdir, tag, dockerfile)
+                    method = await asyncio.to_thread(builder.make_available, tag, kctx)
+                    svc["image"] = tag
+                    await emit("info", "Build", f"{svc['name']}: built {tag} → available via {method}")
+                await emit("stage_exit", "Build", "Images built")
+            except Exception as e:
+                await emit("error", "Build", f"Build failed: {e}")
+                await guide("Build", [f"source build failed: {e}"])
+                return
+            finally:
+                for wd, _sha in clones.values():
+                    await asyncio.to_thread(builder.cleanup, wd)
+
         # Approve (once, whole stack)
         if mode == "manual":
             fut = approvals.create(stack)

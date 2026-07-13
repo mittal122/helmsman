@@ -579,6 +579,7 @@
       if(!svc)return;
       if(fld==="port"){var p=parseInt(v,10);if(p>0)svc.port=p;else bad.push(sn+" port");}
       else if(fld==="image"){if(v)svc.image=v;else bad.push(sn+" image");}
+      else if(fld.indexOf(".")>0){var pp=fld.split(".");svc[pp[0]]=svc[pp[0]]||{};if(v)svc[pp[0]][pp[1]]=v;else bad.push(sn+" "+fld);}
       else{svc[fld]=v;}});
     if(bad.length){$("intk-summary").textContent="Still missing/invalid: "+bad.join(", ");return;}
     curName=intakeCfg.name;curNs=intakeCfg.namespace;curReplicas=1;

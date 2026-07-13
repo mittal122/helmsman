@@ -71,6 +71,25 @@ def test_ingest_worker_and_cronjob_workloads():
     assert "kind: CronJob" in yc and 'schedule: "0 3 * * *"' in yc
 
 
+def test_ingest_build_from_source():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "api", "port": 8000,
+         "build": {"git_repo": "https://github.com/org/api.git", "subdir": "api"}}]}))
+    assert r["missing"] == []
+    api = r["cfg"]["services"][0]
+    assert api["image"] == "" and api["build"]["git_repo"] == "https://github.com/org/api.git"
+    assert api["build"]["subdir"] == "api"
+    assert "build ← https://github.com/org/api.git" in r["summary"]
+    intake.validate_services(r["cfg"]["services"])
+
+
+def test_ingest_build_without_repo_is_missing_and_rejected():
+    r = intake.ingest(json.dumps({"services": [{"name": "api", "port": 80, "build": {"subdir": "x"}}]}))
+    assert ("api", "build.git_repo") in {(m["service"], m["field"]) for m in r["missing"]}
+    with pytest.raises(ValueError):
+        intake.validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
+
+
 def test_ingest_cronjob_without_schedule_is_missing():
     r = intake.ingest(json.dumps({"services": [{"name": "j", "image": "j:1", "type": "cronjob"}]}))
     assert ("j", "schedule") in {(m["service"], m["field"]) for m in r["missing"]}

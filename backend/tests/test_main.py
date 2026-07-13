@@ -130,11 +130,13 @@ def test_deploy_rejects_malformed_compose():
     r = client.post("/deploy", json={"name": "stack", "compose": "services: [not: valid"})
     assert r.status_code == 422
 
-def test_deploy_rejects_build_only_compose():
+def test_deploy_rejects_pasted_build_compose_without_repo():
+    # a build: service needs a git_repo to build from; a pasted compose has none -> reject early
     client = TestClient(main.app)
     r = client.post("/deploy", json={"name": "stack",
-                    "compose": "services:\n  api:\n    build: ./api\n"})
+                    "compose": "services:\n  api:\n    build: ./api\n    ports: ['80']\n"})
     assert r.status_code == 422
+    assert "build" in r.json()["detail"].lower()
 
 def test_deploy_compose_path_needs_git_repo():
     client = TestClient(main.app)
