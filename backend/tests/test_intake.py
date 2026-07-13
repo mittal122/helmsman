@@ -126,6 +126,28 @@ def test_c3_c4_database_probe_and_volume_autofixed():
     assert r["missing"] == []
 
 
+def test_c2_app_inherits_db_password():
+    # DB password known; backend's empty DB password gets set to match, mismatch warns
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+         "secrets": {"POSTGRES_PASSWORD": "s3cret"},
+         "volumes": [{"name": "d", "mountPath": "/var/lib/postgresql/data", "size": "1Gi"}]},
+        {"name": "backend", "image": "org/api:1", "port": 8000,
+         "secrets": {"DB_PASSWORD": None}}]}))
+    be = next(s for s in r["cfg"]["services"] if s["name"] == "backend")
+    assert be["secrets"]["DB_PASSWORD"] == "s3cret"                  # inherited
+    assert any("match the database's password" in w for w in r["warnings"])
+    # a mismatching app password is warned, not overwritten
+    r2 = intake.ingest(json.dumps({"services": [
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+         "secrets": {"POSTGRES_PASSWORD": "s3cret"},
+         "volumes": [{"name": "d", "mountPath": "/var/lib/postgresql/data", "size": "1Gi"}]},
+        {"name": "backend", "image": "org/api:1", "port": 8000, "secrets": {"DB_PASSWORD": "different"}}]}))
+    be2 = next(s for s in r2["cfg"]["services"] if s["name"] == "backend")
+    assert be2["secrets"]["DB_PASSWORD"] == "different"             # not overwritten
+    assert any("differs from the database's password" in w for w in r2["warnings"])
+
+
 def test_ingest_flags_database_missing_password():
     # a postgres service with no password -> asked for up front (Missing), so it can't crash-loop
     r = intake.ingest(json.dumps({"services": [

@@ -6,6 +6,13 @@ import approvals as approvals_mod
 import monitors as monitors_mod
 import breakers as breakers_mod
 
+@pytest.fixture(autouse=True)
+def _fast_externals(monkeypatch):
+    # the deploy flow now curls the endpoint (V4) and runs an advisory LLM stack reviewer;
+    # stub both so unit tests don't do real I/O (probe retries) or hit the LLM.
+    monkeypatch.setattr(coordinator.deploy, "probe_url", lambda *a, **k: 200)
+    monkeypatch.setattr(coordinator.stack_reviewer, "review", lambda *a, **k: {"findings": []})
+
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
     monkeypatch.setattr(coordinator.deploy, "cluster_reachable", lambda *a, **k: (True, "v1.30"))

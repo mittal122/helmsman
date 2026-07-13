@@ -29,3 +29,24 @@ def test_error_resolver_maps_fields(monkeypatch):
     assert calls["prompt_file"] == "error-resolution.md"
     assert calls["placeholders"]["failure_type"] == "ImagePullBackOff"
     assert calls["placeholders"]["recent_logs"] == "boom"
+
+import agents.stack_reviewer as stack_reviewer
+
+def test_stack_reviewer_summary_never_leaks_secret_values():
+    services = [
+        {"name": "backend", "image": "org/api:1", "workload": "deployment", "port": 8000,
+         "published": True, "env": {"DB_HOST": "db"}, "secrets": {"DB_PASSWORD": "s3cret-value"}},
+        {"name": "db", "image": "postgres:16", "workload": "deployment", "port": 5432,
+         "secrets": {"POSTGRES_PASSWORD": "another-secret"}},
+    ]
+    s = stack_reviewer.summarize(services)
+    # secret KEY names are included; secret VALUES never are (redaction invariant)
+    assert "DB_PASSWORD" in s and "POSTGRES_PASSWORD" in s
+    assert "s3cret-value" not in s and "another-secret" not in s
+    assert "name=backend" in s and "image=postgres:16" in s
+
+def test_stack_reviewer_review_maps_fields(monkeypatch):
+    calls = _spy(monkeypatch, stack_reviewer)
+    stack_reviewer.review([{"name": "web", "image": "w:1", "port": 80, "secrets": {"K": "v"}}])
+    assert calls["prompt_file"] == "stack-review.md"
+    assert "name=web" in calls["placeholders"]["stack"] and "v" not in calls["placeholders"]["stack"]

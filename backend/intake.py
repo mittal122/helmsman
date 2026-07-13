@@ -431,6 +431,33 @@ def _rewire_cross_service(services: list, warns: list) -> None:
                                  f"the target service's name (one of: {', '.join(n for n in names if n != svc['name'])}).")
 
 
+# C2 — an app and its database must use the SAME password value or the app can't log in
+# ("password authentication failed"). When a DB's password is known, copy it into any app
+# service's empty DB-password secret; warn if they're set but differ.
+_APP_DBPW_KEY = re.compile(r"(?i)(db|database|postgres|pg|mysql|maria|mongo).*(pass|pwd)|^pgpassword$|^dbpass")
+
+def _share_db_password(services: list, warns: list) -> None:
+    db_pw = ""
+    for s in services:
+        key = diagnostics.db_password_field(s.get("image", ""))
+        if key and str(s["secrets"].get(key, "")).strip():
+            db_pw = str(s["secrets"][key])
+            break                       # single-DB assumption (multi-DB is rare; v1)
+    if not db_pw:
+        return
+    for s in services:
+        if diagnostics.db_password_field(s.get("image", "")):
+            continue                    # the database service itself
+        for k, v in list(s["secrets"].items()):
+            if _APP_DBPW_KEY.search(k):
+                if not str(v).strip():
+                    s["secrets"][k] = db_pw
+                    warns.append(f"{s['name']}: set {k} to match the database's password.")
+                elif str(v) != db_pw:
+                    warns.append(f"{s['name']}: {k} differs from the database's password — they must "
+                                 f"match or the app can't log in.")
+
+
 def ingest(json_text: str, defaults: dict | None = None) -> dict:
     """Parse the dev-AI's returned JSON -> {cfg, missing, summary, warnings}. cfg is ready for
     /deploy (services[] path). `missing` non-empty means DON'T deploy yet — ask the user only
@@ -476,6 +503,7 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
         raise ValueError("no usable services in the JSON")
 
     _rewire_cross_service(services, warns)   # C1: localhost -> target service name
+    _share_db_password(services, warns)      # C2: app inherits the database's password
 
     secrets_n = sum(len(s["secrets"]) for s in services)
     vols_n = sum(len(s["volumes"]) for s in services)

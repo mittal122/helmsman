@@ -43,3 +43,8 @@ def test_get_replicas_desired_is_spec_not_status(monkeypatch):
                              "status": {"readyReplicas": 1, "replicas": 1}})
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
     assert deploy.get_replicas("app", "ns") == (1, 3)  # 1 ready of 3 desired, not 1/1
+
+def test_probe_url_none_when_unreachable():
+    from tools import deploy
+    # nothing listening on this port -> connection refused -> None (not an exception)
+    assert deploy.probe_url("http://127.0.0.1:1/", timeout=1, attempts=1) is None

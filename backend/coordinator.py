@@ -10,7 +10,7 @@ import store
 from breakers import Breaker
 from approvals import Approvals
 from monitors import Monitors
-from agents import error_resolver
+from agents import error_resolver, stack_reviewer
 import guardrails
 
 ROLLOUT_TIMEOUT_S = 120
@@ -323,6 +323,12 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         try:
             lport = await asyncio.to_thread(portforward.start, name, ns, f"svc/{name}", port)
             ep["url"] = f"http://127.0.0.1:{lport}"
+            # V4: actually hit it — "ready" (probe passed) plus "answers a real request" is proof.
+            status = await asyncio.to_thread(deploy.probe_url, ep["url"])
+            ep["responding"] = status is not None
+            await emit("info", "Verify",
+                       (f"Confirmed the app responds (HTTP {status})." if status
+                        else "Rollout is healthy, but the app didn't answer an HTTP request yet — it may still be warming up or not speak HTTP."))
         except Exception:
             pass  # port-forward is best-effort; the service/port-forward cmd still shown
         if seen_failures:
@@ -554,6 +560,20 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 for wd, _sha in clones.values():
                     await asyncio.to_thread(builder.cleanup, wd)
 
+        # AI-brain advisory (Phase 3): a stack reviewer flags multi-service wiring problems the
+        # deterministic rules can't see (an app depending on a service that isn't in the stack,
+        # etc.). Best-effort — swallowed if there's no ANTHROPIC_API_KEY; ADVISORY ONLY, never
+        # blocks (the locked invariant: the LLM proposes, deterministic code disposes). Fed only
+        # the structure (names/images/env KEY names) — never secret values.
+        if len(services) > 1:
+            try:
+                rev = await asyncio.to_thread(stack_reviewer.review, services)
+                for f in (rev.get("findings") or [])[:10]:
+                    await emit("info", "Detect",
+                               f"💡 reviewer — {f.get('service','')}: {f.get('issue','')} → {f.get('suggestion','')}")
+            except Exception:
+                pass   # LLM unavailable / no API key -> the deterministic rules stand on their own
+
         # Proactive guard: a known database image with no password set WILL crash-loop on boot
         # (the #1 cause of a DB CrashLoopBackOff). Warn loudly before we deploy so it's caught up
         # front rather than after the crash.
@@ -662,6 +682,10 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             try:
                 lport = await asyncio.to_thread(portforward.start, sn, ns, f"svc/{sn}", sport)
                 ep["url"] = f"http://127.0.0.1:{lport}"
+                status = await asyncio.to_thread(deploy.probe_url, ep["url"])   # V4
+                ep["responding"] = status is not None
+                if status:
+                    await emit("info", "Verify", f"Confirmed {sn} responds (HTTP {status}).")
             except Exception:
                 pass
             ep["service_name"] = sn

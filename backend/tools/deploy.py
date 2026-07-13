@@ -70,6 +70,25 @@ def get_endpoint(name: str, namespace: str, port: int) -> dict:
         "port_forward": f"kubectl port-forward -n {namespace} svc/{name} {port}:{port}",
     }
 
+def probe_url(url: str, timeout: int = 4, attempts: int = 6, delay: float = 1.0):
+    """V4 — actually hit the endpoint to prove the app RESPONDS (not just 'started'). Returns the
+    HTTP status (any status, incl. 4xx/5xx, means it's answering) or None if unreachable.
+    Retries a few times: a just-started port-forward tunnel takes a second or two to accept
+    connections, so a single immediate probe races it and false-negatives."""
+    import time
+    import urllib.request
+    import urllib.error
+    for i in range(attempts):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code        # a 401/404/500 still proves the server is up and answering
+        except Exception:
+            if i < attempts - 1:
+                time.sleep(delay)
+    return None                  # still not answering after retries
+
 def detect_capabilities() -> dict:
     try:
         ic = subprocess.run(["kubectl", "get", "ingressclass", "-o", "name",
