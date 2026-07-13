@@ -75,9 +75,15 @@ _SCHEMA_EXAMPLE = """{
 
 def build_prompt(context: dict | None = None) -> str:
     """The copy-paste prompt the developer relays to the AI that built their app. Deterministic
-    — the same request for every app, so no LLM is involved on our side."""
+    — the same request for every app, so no LLM is involved on our side.
+
+    context.containerize=True adds a preamble telling the AI to containerize the app first (write
+    Dockerfiles) when it isn't already, then return the SAME structured JSON. This is the whole
+    point of the developer-as-bridge: we ask the app's own AI ONE prompt and it detects the
+    language/framework/dependencies itself — the human is never asked a technical question."""
     c = context or {}
     app = (c.get("app_description") or "").strip()
+    containerize = bool(c.get("containerize"))
     L = []
     L.append("I want to deploy my application to Kubernetes using an automated deployment "
              "agent. The agent will NOT read my code — it only consumes the structured JSON "
@@ -86,6 +92,20 @@ def build_prompt(context: dict | None = None) -> str:
     if app:
         L.append("")
         L.append(f"Application: {app}")
+    if containerize:
+        L.append("")
+        L.append("## First — containerize the app if it isn't already")
+        L.append("- Figure out for yourself whether the app is containerized. If it already has "
+                 "working image(s)/Dockerfile(s), skip to the JSON and report them.")
+        L.append("- If it is NOT containerized: detect the architecture and EVERY component that "
+                 "must run, and write a production-grade, multi-stage Dockerfile for each — a "
+                 "minimal pinned base image (never ':latest'), a non-root user, only production "
+                 "dependencies, plus a .dockerignore. Commit these files to the repository.")
+        L.append("- For a component you just wrote a Dockerfile for (and did NOT build & push an "
+                 "image), report it with a \"build\" spec (the git_repo URL and the Dockerfile "
+                 "path) so the platform builds it from source — do not make me build anything.")
+        L.append("- Do NOT ask me any questions. Infer the language, framework, and dependencies "
+                 "from the project yourself.")
     L.append("")
     L.append("## Rules")
     L.append("- For each component, EITHER report a pre-built, version-pinned \"image\" (never "
@@ -408,6 +428,12 @@ def validate_services(services: list) -> list:
 if __name__ == "__main__":
     prompt = build_prompt({"app_description": "a Django API with Postgres"})
     assert "services" in prompt and "Return ONLY the JSON" in prompt and "Django" in prompt
+    # containerize mode: adds the "containerize first" preamble, still returns the same JSON,
+    # and never asks the human anything.
+    cprompt = build_prompt({"containerize": True})
+    assert "containerize the app if it isn't already" in cprompt and "Do NOT ask me any questions" in cprompt
+    assert "services" in cprompt and "build" in cprompt
+    assert "containerize the app" not in build_prompt({})  # plain prompt has no such preamble
 
     # complete two-service stack -> no missing, correct normalization
     good = json.dumps({

@@ -188,65 +188,25 @@
     bot("First: is your app already containerized — does it have a Docker image?",
         {info:"A container packages your app so it runs the same anywhere. If you used Docker or your project has a 'Dockerfile', it's containerized. Not sure? Pick that and I'll help you find out."});
     buttons([
-      {label:"Yes", fn:function(){ S.containerized=true; me("Yes"); startIntake(); }},
-      {label:"Not yet", cls:"ghost", fn:function(){ S.containerized=false; me("Not yet"); askDescribe(); }},
-      {label:"I'm not sure", cls:"ghost", fn:function(){ S.containerized=false; me("I'm not sure"); askDescribe(); }}
+      {label:"Yes", fn:function(){ S.containerized=true; me("Yes"); showPrompt(false); }},
+      {label:"Not yet", cls:"ghost", fn:function(){ S.containerized=false; me("Not yet"); showPrompt(true); }},
+      {label:"I'm not sure", cls:"ghost", fn:function(){ S.containerized=false; me("I'm not sure"); showPrompt(true); }}
     ]);
   }
 
-  // ---- NOT-YET path: containerization prompt -> image name -> a couple details ----
-  function askDescribe(){
-    bot("No problem — I'll have the AI that built your app containerize it. In one line, what is your app? (its language/framework helps, e.g. \"a Node.js REST API\")",
-        {info:"I don't read or change your code. I write exact instructions for your app's own AI and use what it produces."});
-    textInput("e.g. a Python Flask API", function(v){ S.desc=v; me(v); makeContainerizePrompt(); }, "Describe your app");
-  }
-  function makeContainerizePrompt(){
+  // ONE flow for every answer: generate a prompt for the app's OWN AI, which returns all the
+  // deploy info as structured JSON. We never ask the user a technical question — the AI detects
+  // the language/framework/dependencies itself (and containerizes first when needed).
+  function showPrompt(containerize){
     var t=typing(); waiting();
-    api("/onboard",{app_description:S.desc}).then(function(x){ t.remove();
-      if(!x.ok){ bot("Couldn't prepare that ("+(x.d.detail||x.status)+"). Is the server reachable?",{cls:"bad"}); return buttons([{label:"Try again",fn:makeContainerizePrompt}]); }
-      bot("Copy this and paste it to the AI that built your app (Claude, ChatGPT, Cursor…). It'll containerize your app and give you an image name. Come back when you have it.",
-        {info:"Your app's AI writes a production Dockerfile, builds the image, and prints its name. You bring that name back — that's all I need to run it.", promptText:x.d.containerization_prompt||JSON.stringify(x.d,null,2)});
-      buttons([{label:"I have the image name →", fn:askImageName}]);
-    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:makeContainerizePrompt}]); });
-  }
-  function askImageName(){
-    me("I have the image name");
-    bot("Great — what image name did it give you?",
-        {info:"An image name looks like myorg/myapp:1.0. Kubernetes pulls this exact image to run your app."});
-    textInput("e.g. myorg/myapp:1.0", function(v){ S.image=v; me(v); askAppName(); }, "The image your AI built");
-  }
-  function askAppName(){
-    bot("What should I call this app? (lowercase letters, numbers and dashes)",
-        {info:"This becomes your app's name in the cluster — used to find, update, and roll it back later."});
-    textInput("e.g. my-app", function(v){ S.name=v.toLowerCase(); me(S.name); askPort(); }, "A short name");
-  }
-  function askPort(){
-    bot("Which port does your app listen on? (a number like 3000 or 8080)",
-        {info:"Your app serves traffic on a port. I put it behind a Service and health-check it there, so Kubernetes knows when it's ready."});
-    textInput("e.g. 8080", function(v){ var p=parseInt(v,10); if(!(p>0)){ return; } S.port=p; me(String(p)); confirmSimple(); }, "The port number");
-  }
-  function confirmSimple(){
-    bot("Here's the plan:\n • App: "+S.name+"\n • Image: "+S.image+"\n • Reachable on port "+S.port+"\n • Running with health checks and safe defaults\nShall I deploy it?",
-        {info:"I'll generate the Kubernetes setup from these answers using safe best-practice defaults (health checks, resource limits, non-root), check it, then create it in your cluster."});
-    buttons([
-      {label:"Deploy it →", fn:function(){ me("Deploy it"); deploySimple(); }},
-      {label:"Start over", cls:"ghost", fn:restart}
-    ]);
-  }
-  function deploySimple(){
-    S.deployName=S.name;
-    startDeploy({ name:S.name, image:S.image, port:S.port, namespace:S.namespace, mode:S.mode });
-  }
-
-  // ---- YES path: intake prompt -> paste response -> ingest -> ask missing ----
-  function startIntake(){
-    var t=typing(); waiting();
-    api("/intake/prompt",{app_description:S.desc||""}).then(function(x){ t.remove();
-      if(!x.ok){ bot("Couldn't prepare the prompt ("+(x.d.detail||x.status)+").",{cls:"bad"}); return buttons([{label:"Try again",fn:startIntake}]); }
-      bot("Copy this and paste it to the AI that built your app. It'll hand back everything I need — as one block of text. Paste that back to me.",
-        {info:"Instead of asking you dozens of technical questions, I ask your app's AI once. It knows the ports, environment, database, and everything else — and returns it all in one go.", promptText:x.d.prompt});
+    api("/intake/prompt",{containerize:!!containerize}).then(function(x){ t.remove();
+      if(!x.ok){ bot("Couldn't prepare the prompt ("+(x.d.detail||x.status)+").",{cls:"bad"}); return buttons([{label:"Try again",fn:function(){showPrompt(containerize);}}]); }
+      var lead = containerize
+        ? "No problem — you don't need to know anything technical. Copy this and paste it to the AI that built your app. It'll containerize your app if needed and hand back everything I need, as one block of text. Paste that back to me."
+        : "Copy this and paste it to the AI that built your app. It'll hand back everything I need — as one block of text. Paste that back to me.";
+      bot(lead, {info:"Instead of asking you dozens of technical questions, I ask your app's AI once. It knows the language, ports, environment, database and everything else — and returns it all in one go. If it isn't containerized yet, the same prompt tells the AI to do that first and build it from your repo.", promptText:x.d.prompt});
       buttons([{label:"Paste the response →", fn:askPaste}]);
-    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:startIntake}]); });
+    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:function(){showPrompt(containerize);}}]); });
   }
   function askPaste(){
     me("Paste the response");

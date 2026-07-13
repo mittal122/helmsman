@@ -325,6 +325,7 @@ async def onboard(req: OnboardRequest):
 
 class IntakePromptRequest(BaseModel):
     app_description: str = ""
+    containerize: bool = False   # True = also tell the app's AI to containerize it first (not-yet path)
 
 class IntakeIngestRequest(BaseModel):
     response: str                      # the JSON blob the developer's AI returned
