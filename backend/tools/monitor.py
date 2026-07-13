@@ -40,6 +40,26 @@ def detect_failures(name: str, namespace: str) -> list[dict]:
     items = json.loads(r.stdout).get("items", [])
     return _failures_from_pods(items)
 
+def get_events(name: str, namespace: str, limit: int = 12) -> list[str]:
+    """Recent cluster events mentioning the app (for the structured failure report). Best-effort."""
+    try:
+        r = subprocess.run(
+            ["kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp",
+             "-o", "json", "--request-timeout=8s"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return []
+    if r.returncode != 0:
+        return []
+    out = []
+    for e in json.loads(r.stdout).get("items", []):
+        obj = (e.get("involvedObject") or {}).get("name", "")
+        if name in obj:
+            reason, msg = e.get("reason", ""), e.get("message", "")
+            out.append(f"{reason}: {msg}".strip(": "))
+    return out[-limit:]
+
 def get_metrics(name: str, namespace: str) -> list[dict]:
     try:
         r = subprocess.run(

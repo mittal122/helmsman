@@ -48,3 +48,25 @@ def test_probe_url_none_when_unreachable():
     from tools import deploy
     # nothing listening on this port -> connection refused -> None (not an exception)
     assert deploy.probe_url("http://127.0.0.1:1/", timeout=1, attempts=1) is None
+
+def test_run_smoke_tests_pass_and_fail():
+    from tools import deploy
+    # unreachable endpoint -> fail (got None != expected 200)
+    r = deploy.run_smoke_tests([{"via": "web", "path": "/api", "expect_status": 200}],
+                               {"web": "http://127.0.0.1:1"})
+    assert r[0]["ok"] is False and r[0]["got"] is None
+    # no endpoint for the named service -> fail with an error, not a crash
+    r2 = deploy.run_smoke_tests([{"via": "ghost", "path": "/"}], {})
+    assert r2[0]["ok"] is False and "no reachable endpoint" in r2[0]["error"]
+
+def test_smoke_error_report_never_leaks_secret_values(monkeypatch):
+    from tools import deploy, monitor
+    monkeypatch.setattr(monitor, "get_logs", lambda *a, **k: "line1\nline2\nFATAL: boom")
+    monkeypatch.setattr(monitor, "get_events", lambda *a, **k: ["BackOff: restarting"])
+    rep = deploy.smoke_error_report("Verify", "api", "default",
+                                    {"path": "/api", "expect_status": 200},
+                                    {"DB_PASSWORD": "supersecret", "JWT": "abcd"})
+    assert rep["secret_shape"] == [{"key": "DB_PASSWORD", "length": 11}, {"key": "JWT", "length": 4}]
+    assert "supersecret" not in str(rep)              # values never appear
+    assert rep["last_log_lines"][-1] == "FATAL: boom"  # LAST lines (the exception)
+    assert rep["pod_events"] == ["BackOff: restarting"]

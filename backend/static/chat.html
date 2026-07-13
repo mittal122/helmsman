@@ -369,7 +369,18 @@
     }
     else if(t==="error"){
       var m=ev.message||"Something went wrong.";
-      bot("⚠️ "+m,{cls:"bad"});
+      var r=bot("⚠️ "+m,{cls:"bad"});
+      // structured smoke-failure report -> show it + a copy button for the app's AI
+      var rep=ev.data&&ev.data.error_report;
+      if(rep){
+        var pre=JSON.stringify(rep,null,2);
+        r.bubble.appendChild(el("div","hint","This report has NO secret values (only key lengths). Paste it to the AI that built your app:"));
+        var box=el("div","promptbox");box.appendChild(el("pre",null,pre));
+        var b=el("button","copybtn","📋 Copy failure report for the AI");
+        b.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(pre);b.textContent="✓ Copied — paste to your app's AI";};
+        box.appendChild(b);r.bubble.appendChild(box);
+        buttons([{label:"I fixed it — paste corrected manifest →", fn:askPaste},{label:"Start over", cls:"ghost", fn:restart}]);
+      }
     }
     else if(t==="guidance"){ showGuidance(ev.data||{}); }
     else if(t==="failure"){

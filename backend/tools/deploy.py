@@ -89,6 +89,46 @@ def probe_url(url: str, timeout: int = 4, attempts: int = 6, delay: float = 1.0)
                 time.sleep(delay)
     return None                  # still not answering after retries
 
+def run_smoke_tests(tests: list, endpoints: dict) -> list:
+    """CHANGE 4 — execute the app-author's smoke tests through the browser-facing entrypoints.
+    `endpoints` = {service_name: base_url}. Returns a result per test. 'pods Running' is not
+    success; these are. Retries each check (the app may still be warming up)."""
+    results = []
+    for t in tests:
+        via = str(t.get("via") or "").strip()
+        base = endpoints.get(via) or (next(iter(endpoints.values())) if len(endpoints) == 1 else "")
+        path = str(t.get("path") or "/")
+        expect = int(t.get("expect_status") or 200)
+        if not base:
+            results.append({"test": t, "ok": False, "got": None, "expect": expect,
+                            "error": f"no reachable endpoint for '{via or '(published service)'}'"})
+            continue
+        url = base.rstrip("/") + "/" + path.lstrip("/")
+        got = probe_url(url, attempts=8, delay=1.5)
+        results.append({"test": t, "ok": (got == expect), "got": got, "expect": expect, "url": url})
+    return results
+
+def smoke_error_report(stage: str, service: str, namespace: str, failed, secrets: dict) -> dict:
+    """Structured, AI-pasteable failure report. Secrets appear as {key,length} only — never
+    values. Log lines are the LAST lines (the actual exception), not the first."""
+    from tools import monitor
+    try:
+        logs = monitor.get_logs(service, namespace, tail=60)
+    except Exception:
+        logs = ""
+    try:
+        events = monitor.get_events(service, namespace)
+    except Exception:
+        events = []
+    return {
+        "stage": stage,
+        "service": service,
+        "pod_events": events[-8:],
+        "last_log_lines": logs.strip().splitlines()[-20:],
+        "failed_smoke_test": failed,
+        "secret_shape": [{"key": k, "length": len(str(v))} for k, v in (secrets or {}).items()],
+    }
+
 def detect_capabilities() -> dict:
     try:
         ic = subprocess.run(["kubectl", "get", "ingressclass", "-o", "name",

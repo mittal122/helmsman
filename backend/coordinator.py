@@ -674,6 +674,7 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             return
 
         # Port-forward each browser-facing service; emit an endpoint per forward
+        endpoints = {}
         for svc in services:
             if not svc.get("published"):
                 continue
@@ -682,6 +683,7 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             try:
                 lport = await asyncio.to_thread(portforward.start, sn, ns, f"svc/{sn}", sport)
                 ep["url"] = f"http://127.0.0.1:{lport}"
+                endpoints[sn] = ep["url"]
                 status = await asyncio.to_thread(deploy.probe_url, ep["url"])   # V4
                 ep["responding"] = status is not None
                 if status:
@@ -690,6 +692,35 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 pass
             ep["service_name"] = sn
             await emit("endpoint", "Verify", f"{sn} is live", ep)
+
+        # CHANGE 4 — SUCCESS = the user's paths work, not just "pods Running". Run the app-author's
+        # smoke tests through the published entrypoints; any failure => the deploy FAILED (even
+        # though every pod is Ready), with a structured, AI-pasteable error report.
+        smoke = cfg.get("smoke_tests") or []
+        if smoke:
+            await emit("info", "Verify", f"Running {len(smoke)} smoke test(s) — the real check that the app works…")
+            results = await asyncio.to_thread(deploy.run_smoke_tests, smoke, endpoints)
+            failed = [r for r in results if not r["ok"]]
+            for r in results:
+                t = r["test"]
+                if r["ok"]:
+                    await emit("info", "Verify", f"✓ smoke: {t.get('path','/')} → {r['got']} ({t.get('proves','')})")
+                else:
+                    await emit("error", "Verify",
+                               f"✗ smoke FAILED: {t.get('path','/')} expected {r['expect']} got {r.get('got')} "
+                               f"— {t.get('proves','')}", {"smoke": r})
+            if failed:
+                first = failed[0]
+                svc0 = str(first["test"].get("via") or (services[0]["name"]))
+                svc_obj = svc_by_name.get(svc0) or services[0]
+                report = await asyncio.to_thread(deploy.smoke_error_report, "Verify", svc0, ns,
+                                                 first, svc_obj.get("secrets") or {})
+                await emit("error", "Verify",
+                           "Deployment FAILED — pods are Running but the app doesn't work end-to-end. "
+                           "Paste this report to the AI that built the app.", {"error_report": report})
+                await guide_crash("Verify", svc0)
+                return
+            await emit("info", "Verify", "All smoke tests passed — the app works end-to-end. 🎉")
         await emit("stage_exit", "Verify", "All services ready")
 
         # Monitor (once, all services)
