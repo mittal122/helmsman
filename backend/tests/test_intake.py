@@ -90,6 +90,19 @@ def test_ingest_build_without_repo_is_missing_and_rejected():
         intake.validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
 
 
+def test_ingest_flags_database_missing_password():
+    # a postgres service with no password -> asked for up front (Missing), so it can't crash-loop
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False}]}))
+    fields = {(m["service"], m["field"]) for m in r["missing"]}
+    assert ("db", "secrets.POSTGRES_PASSWORD") in fields, r["missing"]
+    # with a password provided, no Missing
+    r2 = intake.ingest(json.dumps({"services": [
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+         "secrets": {"POSTGRES_PASSWORD": "s3cret"}}]}))
+    assert r2["missing"] == []
+
+
 def test_ingest_service_account_and_rbac():
     r = intake.ingest(json.dumps({"services": [
         {"name": "ctl", "image": "ctl:1", "port": 8080,

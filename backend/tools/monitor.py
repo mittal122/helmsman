@@ -58,15 +58,24 @@ def get_metrics(name: str, namespace: str) -> list[dict]:
             rows.append({"pod": parts[0], "cpu": parts[1], "memory": parts[2]})
     return rows
 
-# ponytail: interface-locked for a later logs UI; not wired into the coordinator yet
-def get_logs(name: str, namespace: str, tail: int = 20) -> str:
+def get_logs(name: str, namespace: str, tail: int = 20, previous: bool = False) -> str:
+    args = ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",
+            "-n", namespace, "--tail", str(tail), "--all-containers", "--prefix",
+            "--request-timeout=10s"]
+    if previous:
+        args.append("--previous")   # the CRASHED instance's logs (why it died)
     try:
-        r = subprocess.run(
-            ["kubectl", "logs", "-l", f"app.kubernetes.io/name={name}",
-             "-n", namespace, "--tail", str(tail), "--all-containers", "--prefix",
-             "--request-timeout=10s"],
-            capture_output=True, text=True, timeout=20,
-        )
+        r = subprocess.run(args, capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         return ""
     return r.stdout if r.returncode == 0 else ""
+
+def crash_logs(name: str, namespace: str, tail: int = 60) -> str:
+    """The most useful logs for a crash-looping pod. A CrashLoopBackOff container is constantly
+    restarting, so its CURRENT logs are often empty/partial — the PREVIOUS (crashed) instance's
+    logs hold the real error (e.g. 'database is uninitialized and superuser password is not
+    specified'). Try previous first, fall back to current."""
+    prev = get_logs(name, namespace, tail, previous=True)
+    if prev.strip():
+        return prev
+    return get_logs(name, namespace, tail)

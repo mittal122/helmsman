@@ -46,10 +46,18 @@ async def run(cfg: dict, bus: EventBus, approvals: Approvals, monitors: Monitors
         # catalog ALWAYS produces guidance; the LLM error-resolver only enriches it,
         # best-effort. A missing ANTHROPIC_API_KEY (or any LLM error) is swallowed —
         # we never leak an SDK auth error into the feed.
+        # For a runtime crash, pull the CRASHED container's real logs first so the diagnosis
+        # names the actual cause (e.g. postgres needs a password) and the fix-prompt carries
+        # the verbatim error — not a generic "check the logs".
+        logs = ""
+        if failure:
+            try:
+                logs = await asyncio.to_thread(monitor.crash_logs, name, ns)
+            except Exception:
+                logs = ""
         g = diagnostics.diagnose(stage, issues,
-                                 {"name": name, "image": cfg.get("image", ""), "namespace": ns})
+                                 {"name": name, "image": cfg.get("image", ""), "namespace": ns}, logs=logs)
         try:
-            logs = await asyncio.to_thread(monitor.get_logs, name, ns) if failure else ""
             ctx = {"failure_type": (failure.get("type") if failure else f"{stage}Failed") or "",
                    "pod_status": (failure.get("pod") if failure else ""),
                    "recent_events": (failure.get("message") if failure
@@ -405,6 +413,20 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
         g = diagnostics.diagnose(stage, issues, {"name": stack, "image": "", "namespace": ns})
         await emit("guidance", stage, g["summary"], g)
 
+    svc_by_name = {s["name"]: s for s in services}
+
+    async def guide_crash(stage, sn):
+        # a crashing service -> fetch its CRASHED container's real logs and diagnose the actual
+        # cause (postgres-needs-password, connection-refused, …) with the logs in the fix-prompt.
+        svc = svc_by_name.get(sn) or {}
+        try:
+            logs = await asyncio.to_thread(monitor.crash_logs, sn, ns)
+        except Exception:
+            logs = ""
+        g = diagnostics.diagnose(stage, [f"CrashLoopBackOff on {sn}"],
+                                 {"name": sn, "image": svc.get("image", ""), "namespace": ns}, logs=logs)
+        await emit("guidance", stage, g["summary"], g)
+
     monitors.stop_all()
     await asyncio.to_thread(portforward.stop_all)
 
@@ -532,6 +554,16 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 for wd, _sha in clones.values():
                     await asyncio.to_thread(builder.cleanup, wd)
 
+        # Proactive guard: a known database image with no password set WILL crash-loop on boot
+        # (the #1 cause of a DB CrashLoopBackOff). Warn loudly before we deploy so it's caught up
+        # front rather than after the crash.
+        for svc in services:
+            hint = diagnostics.db_required_env_missing(
+                svc.get("image", ""), {**(svc.get("env") or {}), **(svc.get("secrets") or {})})
+            if hint:
+                await emit("info", "Detect",
+                           f"⚠ {svc['name']}: this database needs {hint} — set it or the pod will crash on start.")
+
         # Approve (once, whole stack)
         if mode == "manual":
             fut = approvals.create(stack)
@@ -616,8 +648,9 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 failures += await asyncio.to_thread(monitor.detect_failures, sn, ns)
             await emit("error", "Verify", f"Services not ready in time: {', '.join(sorted(pending))}",
                        {"pending": sorted(pending), "failures": failures})
-            await guide("Verify", [f"{f['type']} on {f['pod']}: {f.get('message','')}" for f in failures]
-                        or [f"services {', '.join(sorted(pending))} never reached ready"])
+            # per-service crash diagnosis from the REAL logs (names the actual cause + fix-prompt)
+            for sn in sorted(pending):
+                await guide_crash("Verify", sn)
             return
 
         # Port-forward each browser-facing service; emit an endpoint per forward
@@ -652,9 +685,14 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 for f in failures:
                     fails_now.add((sn, f["pod"], f["type"]))
             await emit("health", "Monitor", "Stack health snapshot", {"services": snapshot})
-            for key in fails_now - prev_fail:
+            new = fails_now - prev_fail
+            for key in new:
                 await emit("failure", "Monitor", f"{key[2]} on {key[1]} ({key[0]})",
                            {"service": key[0], "pod": key[1], "type": key[2]})
+            # automatically diagnose each newly-crashing service from its real logs (once per
+            # service per batch) so the user gets the actual cause + a fix-prompt, not just "it's failing".
+            for sn in {k[0] for k in new if k[2] in ("CrashLoopBackOff", "Error", "CreateContainerConfigError")}:
+                await guide_crash("Monitor", sn)
             prev_fail = fails_now
             await asyncio.sleep(MONITOR_INTERVAL_S)
         await emit("stage_exit", "Monitor", "Monitoring stopped")

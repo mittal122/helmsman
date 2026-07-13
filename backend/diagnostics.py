@@ -106,6 +106,101 @@ _RULES = [
               "Rebuild on a patched base image or bump to a newer image tag that fixes the CVEs, then deploy again.")),
 ]
 
+# ---- crash-log catalog: map the REAL container logs of a crash-looping pod to a specific
+# cause + fix. This is what makes "CrashLoopBackOff" actionable instead of "check the logs".
+# Ordered; first match wins. Predicates run on the lowercased log text.
+_CRASH_RULES = [
+    (lambda s: "superuser password is not specified" in s or ("postgres_password" in s and ("not specified" in s or "not set" in s)),
+     lambda: ("PostgreSQL won't start — no password is set",
+              "The postgres image refuses to initialize without POSTGRES_PASSWORD (or POSTGRES_HOST_AUTH_METHOD).",
+              "Set POSTGRES_PASSWORD for the database service (it's stored as a Secret). In the guided flow this is a required value — make sure it isn't left blank. For a throwaway local DB you can instead set POSTGRES_HOST_AUTH_METHOD=trust.")),
+    (lambda s: "you need to specify one of mysql_root_password" in s or "mariadb_root_password" in s or ("mysql_root_password" in s and "password" in s),
+     lambda: ("MySQL/MariaDB won't start — no root password is set",
+              "The image needs MYSQL_ROOT_PASSWORD (or MYSQL_ALLOW_EMPTY_PASSWORD / MYSQL_RANDOM_ROOT_PASSWORD) to initialize.",
+              "Set MYSQL_ROOT_PASSWORD for the database service (stored as a Secret) and make sure it isn't blank.")),
+    (lambda s: "mongo_initdb_root_password" in s or ("mongo" in s and "password" in s and "not" in s),
+     lambda: ("MongoDB won't start — no root password is set",
+              "The mongo image needs MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD.",
+              "Set MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD (Secret) for the database service.")),
+    (lambda s: "password authentication failed" in s or "access denied for user" in s or "authentication failed" in s,
+     lambda: ("The app can't log in to its database (wrong password)",
+              "The password the app uses doesn't match the database's. This happens when the two use different Secret values.",
+              "Use the SAME password value for the database's POSTGRES_PASSWORD/MYSQL_PASSWORD and the app's DB password env var — one shared Secret value.")),
+    (lambda s: "connection refused" in s or "econnrefused" in s or "could not connect to server" in s or "could not translate host name" in s or "getaddrinfo" in s or "no route to host" in s,
+     lambda: ("The app can't reach a service it depends on (e.g. the database)",
+              "The app started before its dependency was ready, or it's using the wrong host/port. Start-order alone doesn't guarantee the dependency is READY to accept connections.",
+              "Point the app at the dependency by its service name and port (e.g. host `db`, port `5432` — cluster DNS resolves it). Make the app retry the connection on startup instead of exiting; a DB takes a few seconds to accept connections after its pod starts.")),
+    (lambda s: "address already in use" in s or "eaddrinuse" in s or "bind: address already in use" in s,
+     lambda: ("The app's port is already in use",
+              "The container tried to bind a port that's taken, or the port it listens on doesn't match the one declared.",
+              "Make the port the app binds match the port you told the platform it listens on, and make sure only one process binds it.")),
+    (lambda s: "read-only file system" in s or ("permission denied" in s and ("mkdir" in s or "open" in s or "write" in s)),
+     lambda: ("The app can't write to a folder (read-only filesystem)",
+              "For security the container's root filesystem is read-only by default; the app is trying to write somewhere that isn't a mounted volume.",
+              "Give the app a writable volume for that path (a persistent volume if the data must survive, or a scratch space otherwise). A database service that declares a data volume gets a writable data dir automatically.")),
+    (lambda s: "modulenotfounderror" in s or "cannot find module" in s or "no module named" in s or "importerror" in s,
+     lambda: ("A code dependency is missing from the image",
+              "The app can't import a library — it wasn't installed in the built image.",
+              "Add the missing dependency to your requirements/package file and rebuild the image, then redeploy.")),
+    (lambda s: "keyerror" in s or ("environment variable" in s and ("not set" in s or "missing" in s or "required" in s or "undefined" in s)),
+     lambda: ("A required environment variable is missing",
+              "The app read an env var that wasn't provided and crashed on startup.",
+              "Add the missing environment variable (as env, or a Secret if it's sensitive) for this service. The crash log above names it.")),
+    (lambda s: "exec format error" in s or "exec /" in s and "no such file" in s or "no such file or directory" in s and "exec" in s,
+     lambda: ("The container can't run its start command",
+              "Either the image is built for a different CPU architecture, or the entrypoint/command points at a file that isn't there.",
+              "Rebuild the image for the right architecture, or fix the start command/entrypoint path.")),
+]
+
+def diagnose_crash(logs: str) -> dict | None:
+    """Match a crash-looping pod's REAL logs to a specific cause. None if no rule matches."""
+    low = (logs or "").lower()
+    if not low.strip():
+        return None
+    for pred, build in _CRASH_RULES:
+        try:
+            if pred(low):
+                p, c, f = build()
+                return {"problem": p, "cause": c, "fix": f, "checker": "container logs", "raw": ""}
+        except Exception:
+            continue
+    return None
+
+
+# known stateful images -> the env var(s) that MUST be non-empty or the container crash-loops.
+# Used proactively (before deploy) so a database never crash-loops for the #1 reason.
+_DB_REQUIRED_ENV = [
+    (("postgres", "postgis", "timescale", "pgvector"),
+     ("POSTGRES_PASSWORD", "POSTGRES_HOST_AUTH_METHOD"),
+     "POSTGRES_PASSWORD (or POSTGRES_HOST_AUTH_METHOD=trust for a local-only DB)"),
+    (("mysql", "mariadb", "percona"),
+     ("MYSQL_ROOT_PASSWORD", "MYSQL_ALLOW_EMPTY_PASSWORD", "MYSQL_RANDOM_ROOT_PASSWORD"),
+     "MYSQL_ROOT_PASSWORD"),
+    (("mongo",),
+     ("MONGO_INITDB_ROOT_PASSWORD",),
+     "MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD"),
+]
+
+def db_required_env_missing(image: str, provided: dict) -> str:
+    """If `image` is a known database that needs an init password and none of its accepted env
+    keys is present with a non-empty value, return a human hint naming what to set. Else ''.
+    `provided` is the merged env+secrets dict for the service."""
+    img = (image or "").lower()
+    have = {k for k, v in (provided or {}).items() if str(v).strip()}
+    for names, accepted, hint in _DB_REQUIRED_ENV:
+        if any(n in img for n in names) and not (set(accepted) & have):
+            return hint
+    return ""
+
+def db_password_field(image: str) -> str:
+    """The primary password env key for a known database image (else '')."""
+    img = (image or "").lower()
+    for names, accepted, _hint in _DB_REQUIRED_ENV:
+        if any(n in img for n in names):
+            return accepted[0]
+    return ""
+
+
 def _one(issue: str) -> dict:
     low = issue.lower()
     for pred, build in _RULES:
@@ -122,7 +217,7 @@ def _one(issue: str) -> dict:
             "fix": "Adjust your image or config to satisfy the check, then deploy again.",
             "checker": _checker(issue), "raw": issue}
 
-def build_fix_prompt(stage: str, context: dict, items: list, issues: list) -> str:
+def build_fix_prompt(stage: str, context: dict, items: list, issues: list, logs: str = "") -> str:
     """A self-contained, copy-pasteable prompt the user can hand to ANY AI/coding
     assistant so it can fix the issue in their project. Includes the context an
     outside AI can't otherwise know (app, image, exact checker output)."""
@@ -145,6 +240,13 @@ def build_fix_prompt(stage: str, context: dict, items: list, issues: list) -> st
     L.append("## What the automated checks reported (verbatim)")
     for i in (issues or []):
         L.append(f"- {i}")
+    if logs and logs.strip():
+        L.append("")
+        L.append("## Actual container logs (verbatim — this is the real error)")
+        L.append("```")
+        # last ~40 lines is plenty of signal without flooding the prompt
+        L.append("\n".join(logs.strip().splitlines()[-40:]))
+        L.append("```")
     L.append("")
     L.append("## Diagnosis")
     for it in items:
@@ -159,13 +261,20 @@ def build_fix_prompt(stage: str, context: dict, items: list, issues: list) -> st
              "re-run the deploy after applying your change.")
     return "\n".join(L)
 
-def diagnose(stage: str, issues, context: dict = None) -> dict:
+def diagnose(stage: str, issues, context: dict = None, logs: str = "") -> dict:
     """issues: a list[str] of checker messages, or a single string.
-    context (optional): {name, image, namespace} — used to build the AI fix-prompt."""
+    context (optional): {name, image, namespace} — used to build the AI fix-prompt.
+    logs (optional): a crash-looping pod's real container logs. When given, they're matched to
+    a specific crash cause (postgres-needs-password, connection-refused, …) which becomes the
+    primary item, and the logs are embedded VERBATIM in the fix-prompt so the developer's AI
+    sees the real error instead of a generic template."""
     if isinstance(issues, str):
         issues = [issues]
     issues = [i for i in (issues or []) if i and str(i).strip()]
     items, seen = [], set()
+    crash = diagnose_crash(logs)          # specific cause from the real logs, if any
+    if crash:
+        items.append(crash); seen.add(crash["problem"])
     for i in issues:
         it = _one(str(i))
         key = it["problem"]
@@ -180,7 +289,7 @@ def diagnose(stage: str, issues, context: dict = None) -> dict:
         "summary": f"{n} issue{'s' if n != 1 else ''} to fix before I can deploy — I can't safely auto-fix {'these' if n != 1 else 'this'} for you.",
         "items": items,
         "auto_fixable": False,
-        "fix_prompt": build_fix_prompt(stage, context, items, issues),
+        "fix_prompt": build_fix_prompt(stage, context, items, issues, logs),
     }
 
 
@@ -197,4 +306,21 @@ if __name__ == "__main__":
     assert g3["items"][0]["checker"] == "validator" and g3["items"][0]["raw"]
     g4 = diagnose("Validate", ["kube-score: cpu request", "kube-score: cpu limit missing"])
     assert len(g4["items"]) == 1  # deduped by problem
+
+    # crash-log diagnosis: the real postgres error -> a specific cause, not "check the logs"
+    pg = "2026-07-13 FATAL: database is uninitialized and superuser password is not specified"
+    cr = diagnose_crash(pg)
+    assert cr and "PostgreSQL won't start" in cr["problem"] and "POSTGRES_PASSWORD" in cr["fix"], cr
+    gc = diagnose("Verify", ["CrashLoopBackOff on postgres-xyz"],
+                  {"name": "postgres", "image": "postgres:16", "namespace": "default"}, logs=pg)
+    assert gc["items"][0]["problem"].startswith("PostgreSQL"), gc["items"][0]
+    assert "Actual container logs" in gc["fix_prompt"] and "superuser password" in gc["fix_prompt"]
+    assert diagnose_crash("some app: connection refused to db:5432")["problem"].startswith("The app can't reach")
+    assert diagnose_crash("") is None and diagnose_crash("just some normal startup log") is None
+
+    # proactive DB guard: a postgres with no password is flagged BEFORE it can crash-loop
+    assert db_required_env_missing("postgres:16", {}) and "POSTGRES_PASSWORD" in db_required_env_missing("postgres:16", {})
+    assert db_required_env_missing("postgres:16", {"POSTGRES_PASSWORD": "s3cret"}) == ""
+    assert db_required_env_missing("postgres:16", {"POSTGRES_PASSWORD": ""})        # empty value = still missing
+    assert db_required_env_missing("mysql:8", {}) and db_required_env_missing("nginx:1.27", {}) == ""
     print("diagnostics ok:", g["summary"])

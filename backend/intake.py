@@ -25,6 +25,8 @@ ports, resources, health->probe, named volumes->PVC, replicas, command/args, run
 import json
 import re
 
+import diagnostics
+
 _RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 _SECRETISH = re.compile(r"(?i)(PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|APIKEY|KEY)")
 
@@ -215,6 +217,13 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         if _SECRETISH.search(k):
             secrets[k] = env.pop(k)
             warns.append(f"{label}: '{k}' looks sensitive — moved to secrets so it stays redacted")
+
+    # proactive: a known database image won't start without its init password — ask for it up
+    # front (as a Missing field) instead of letting the pod crash-loop after deploy.
+    if image and diagnostics.db_required_env_missing(image, {**env, **secrets}):
+        _dbkey = diagnostics.db_password_field(image) or "DB_PASSWORD"
+        missing.append({"service": label, "field": "secrets." + _dbkey,
+                        "hint": "this database won't start without a password — set " + _dbkey})
 
     replicas = _int_or_none(raw.get("replicas"))
     replicas = replicas if (replicas and replicas > 0) else 1
