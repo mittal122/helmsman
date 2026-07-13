@@ -14,6 +14,7 @@ from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
 from tools import rollback, cluster, portforward, builder, compose
+import intake
 from breakers import Breaker
 import logging
 import store
@@ -93,6 +94,7 @@ class DeployRequest(BaseModel):
     compose: str = ""      # multi-service: raw docker-compose YAML (deploys the whole stack)
     compose_path: str = "" # or read the compose file at this path inside git_repo
     compose_env: dict[str, str] = {}  # values for ${VAR} interpolation in the compose file (e.g. TAG, POSTGRES_PASSWORD)
+    services: list[dict] = []  # structured-intake path: pre-normalized per-service cfgs (from POST /intake/ingest)
     allow_vulnerable: bool = False  # operator override: proceed even if the image scan gate finds CRITICAL/HIGH vulns
 
     @field_validator("compose_path")
@@ -131,8 +133,8 @@ class DeployRequest(BaseModel):
     def _image_or_repo(self):
         if self.compose_path and not self.git_repo:
             raise ValueError("compose_path needs git_repo")
-        if not self.image and not self.git_repo and not self.compose:
-            raise ValueError("provide 'image', 'git_repo', or 'compose'")
+        if not self.image and not self.git_repo and not self.compose and not self.services:
+            raise ValueError("provide 'image', 'git_repo', 'compose', or 'services'")
         return self
 
 class DockerfilesRequest(BaseModel):
@@ -238,6 +240,16 @@ async def deploy(req: DeployRequest):
             raise HTTPException(status_code=422, detail=f"compose parse error: {e}")
         cfg["services"], cfg["warnings"] = services, warnings
         src = f"compose={len(services)} services"
+    elif req.services:
+        # structured-intake path: services are already normalized by intake.ingest; re-validate
+        # here so a hand-crafted POST can't smuggle an incomplete/invalid service past the gate.
+        try:
+            intake.validate_services(req.services)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"invalid services: {e}")
+        cfg["services"] = req.services
+        cfg.setdefault("warnings", [])
+        src = f"intake={len(req.services)} services"
     elif req.git_repo:
         src = f"git={builder.display_url(req.git_repo)}"
     task = asyncio.create_task(coordinator_run(cfg, bus, approvals, monitors, breakers))
@@ -304,6 +316,30 @@ async def advise_config(req: AdviseRequest):
 @app.post("/onboard", dependencies=[Depends(auth.require_token)])
 async def onboard(req: OnboardRequest):
     return await asyncio.to_thread(onboarding.generate, req.model_dump())
+
+class IntakePromptRequest(BaseModel):
+    app_description: str = ""
+
+class IntakeIngestRequest(BaseModel):
+    response: str                      # the JSON blob the developer's AI returned
+    name: str = ""
+    namespace: str = "default"
+    mode: str = "manual"
+
+@app.post("/intake/prompt", dependencies=[Depends(auth.require_token)])
+async def intake_prompt(req: IntakePromptRequest):
+    # deterministic (no LLM): the fixed structured-intake prompt the developer relays to the
+    # AI that built their app, so it returns ALL deploy info in one JSON blob.
+    return {"prompt": intake.build_prompt(req.model_dump())}
+
+@app.post("/intake/ingest", dependencies=[Depends(auth.require_token)])
+async def intake_ingest(req: IntakeIngestRequest):
+    # consume ONLY the structured response -> deploy-ready cfg + Missing list + summary.
+    # Never assumes a missing value; the UI asks the user for exactly what's Missing.
+    try:
+        return intake.ingest(req.response, {"name": req.name, "namespace": req.namespace, "mode": req.mode})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 @app.post("/kubeconfigs", dependencies=[Depends(auth.require_role("admin"))])
 async def add_kubeconfig(req: KubeconfigRequest):

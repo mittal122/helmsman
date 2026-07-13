@@ -1,0 +1,336 @@
+"""Single-shot structured intake — the "developer is just a bridge" loop (master-prompt
+Phase 1, Case 2: the app is already containerized).
+
+Flow:
+  1. build_prompt()  -> a copy-paste prompt the developer hands to the AI that built their
+     app. It asks that AI to return ALL deployment info as ONE JSON blob in a fixed schema.
+  2. ingest(json)    -> deterministically parse that returned JSON into the SAME normalized
+     service cfgs the coordinator already consumes (identical shape to tools/compose.parse),
+     compute a Missing list (never assume a value), and a human summary.
+
+Design (locked invariants kept):
+- The prompt is DETERMINISTIC (a constant template), not an LLM call — the schema is fixed,
+  so there is nothing to "generate". Schema is defined ONCE here, next to the parser that
+  reads it, so the two can't drift.
+- ingest is deterministic + pure (touches no cluster, runs no repo code) and treats the
+  pasted JSON as untrusted DATA: values are validated field-by-field, never executed and
+  never sent to an LLM to act on. A field trying to look like an instruction is just a bad
+  value.
+- Output service cfgs match tools/compose.py exactly, so coordinator._run_compose renders
+  and deploys them with zero new deploy machinery.
+
+v1 scope (mirrors compose v1): pre-built images only (no build:), inline env/secrets,
+ports, resources, health->probe, named volumes->PVC, replicas, command/args, run_as_user.
+"""
+import json
+import re
+
+_RFC1123 = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+_SECRETISH = re.compile(r"(?i)(PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL|APIKEY|KEY)")
+
+
+def _k8s_name(s: str) -> str:
+    """Coerce any string to a valid RFC1123 label (dev-AI may return 'My App')."""
+    s = re.sub(r"[^a-z0-9-]", "-", (s or "").lower()).strip("-")
+    return s or "app"
+
+
+# The exact JSON the developer's AI must return. Kept compact but complete. Every field the
+# coordinator can use is listed so the dev-AI fills it in one shot (never re-questioned).
+_SCHEMA_EXAMPLE = """{
+  "application": { "name": "my-app", "namespace": "default" },
+  "services": [
+    {
+      "name": "web",                        // REQUIRED, lowercase (becomes the K8s name + DNS)
+      "image": "myorg/web:1.4.2",           // REQUIRED, pre-built + version-pinned (never :latest)
+      "port": 3000,                          // REQUIRED, the port the container listens on
+      "extra_ports": [9090],                // other container ports (optional)
+      "replicas": 2,
+      "published": true,                     // true = browser-facing (gets a port-forward)
+      "env": { "APP_ENV": "prod" },         // non-secret config
+      "secrets": { "DB_PASSWORD": "..." },  // sensitive values (redacted everywhere)
+      "command": [],                         // entrypoint override (optional)
+      "args": [],                            // command/args override (optional)
+      "resources": {
+        "requests": { "cpu": "100m", "memory": "128Mi" },
+        "limits":   { "cpu": "500m", "memory": "256Mi" }
+      },
+      "health": { "type": "http", "path": "/healthz" },  // type: http|tcp|exec|none; exec uses "command": [...]
+      "volumes": [ { "name": "data", "mountPath": "/var/lib/app", "size": "1Gi" } ],
+      "run_as_user": null,                   // numeric UID if the image needs a specific user
+      "depends_on": ["db"]                   // start-order hint (optional)
+    }
+  ]
+}"""
+
+
+def build_prompt(context: dict | None = None) -> str:
+    """The copy-paste prompt the developer relays to the AI that built their app. Deterministic
+    — the same request for every app, so no LLM is involved on our side."""
+    c = context or {}
+    app = (c.get("app_description") or "").strip()
+    L = []
+    L.append("I want to deploy my application to Kubernetes using an automated deployment "
+             "agent. The agent will NOT read my code — it only consumes the structured JSON "
+             "you produce below. You built (or fully understand) this application, so gather "
+             "EVERYTHING needed to deploy it and return it in ONE JSON object.")
+    if app:
+        L.append("")
+        L.append(f"Application: {app}")
+    L.append("")
+    L.append("## Rules")
+    L.append("- The app is already containerized. Report the pre-built, version-pinned image "
+             "for each component (never ':latest').")
+    L.append("- Detect the architecture automatically: include EVERY component that must run "
+             "(frontend, backend, workers, cron jobs, databases, queues, background services). "
+             "One entry in \"services\" per component. Do not invent components that don't exist.")
+    L.append("- For each service report: image, the container port, env vars, secrets, health "
+             "check, resource requests/limits, replicas, volumes, and any startup command.")
+    L.append("- Put sensitive values (passwords, tokens, API keys) under \"secrets\", not \"env\".")
+    L.append("- If you genuinely don't know a value, use null — do NOT guess. The agent will "
+             "ask me only for what's missing.")
+    L.append("- Return ONLY the JSON object, no prose around it.")
+    L.append("")
+    L.append("## Return exactly this shape")
+    L.append("```json")
+    L.append(_SCHEMA_EXAMPLE)
+    L.append("```")
+    return "\n".join(L)
+
+
+def _norm_probe(health, port) -> dict:
+    """health block -> chart probe. Absent health defaults to a TCP probe (works for db/redis/
+    web) rather than HTTP — an HTTP probe on a non-HTTP service is the classic crash-loop."""
+    if isinstance(health, dict) and health.get("type"):
+        t = str(health["type"]).lower()
+        if t == "http":
+            return {"type": "http", "path": health.get("path") or "/"}
+        if t == "tcp":
+            return {"type": "tcp"}
+        if t == "exec":
+            cmd = health.get("command") or []
+            return {"type": "exec", "command": [str(x) for x in cmd]} if cmd else {"type": "tcp" if port else "none"}
+        if t == "none":
+            return {"type": "none"}
+    return {"type": "tcp"} if port else {"type": "none"}
+
+
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _norm_service(raw: dict, missing: list, warns: list) -> dict:
+    """One intake service dict -> normalized cfg (same keys as tools/compose.parse output).
+    Present-but-invalid values are dropped to a Missing entry, not trusted."""
+    name_raw = str(raw.get("name") or "").strip()
+    name = _k8s_name(name_raw)
+    if name_raw and not _RFC1123.match(name_raw):
+        warns.append(f"service name '{name_raw}' adjusted to '{name}' (Kubernetes names are lowercase alnum + '-')")
+    label = name or "(unnamed)"
+
+    image = str(raw.get("image") or "").strip()
+    if not image:
+        missing.append({"service": label, "field": "image",
+                        "hint": "the pre-built, version-pinned container image, e.g. myorg/web:1.4.2"})
+    elif image.startswith("-") or any(ch.isspace() for ch in image):
+        warns.append(f"{label}: image '{image}' is not a valid reference — treated as missing")
+        missing.append({"service": label, "field": "image", "hint": "a valid image reference"})
+        image = ""
+
+    port = _int_or_none(raw.get("port"))
+    if port is None or not (0 < port < 65536):
+        if raw.get("port") not in (None, ""):
+            warns.append(f"{label}: port '{raw.get('port')}' is not a valid port — treated as missing")
+        missing.append({"service": label, "field": "port",
+                        "hint": "the port number the container listens on, e.g. 3000"})
+        port = None
+
+    env = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("env") or {}).items()}
+    secrets = {str(k): ("" if v is None else str(v)) for k, v in (raw.get("secrets") or {}).items()}
+    # safety net: a credential-looking key left in env gets moved to secrets (redaction).
+    for k in list(env):
+        if _SECRETISH.search(k):
+            secrets[k] = env.pop(k)
+            warns.append(f"{label}: '{k}' looks sensitive — moved to secrets so it stays redacted")
+
+    replicas = _int_or_none(raw.get("replicas"))
+    replicas = replicas if (replicas and replicas > 0) else 1
+
+    extra = [p for p in (_int_or_none(x) for x in (raw.get("extra_ports") or [])) if p]
+    resources = raw.get("resources") if isinstance(raw.get("resources"), dict) else {}
+    volumes = []
+    for v in (raw.get("volumes") or []):
+        if isinstance(v, dict) and v.get("mountPath"):
+            volumes.append({"name": _k8s_name(v.get("name") or "data"),
+                            "mountPath": str(v["mountPath"]), "size": str(v.get("size") or "1Gi")})
+
+    return {
+        "name": name,
+        "image": image,
+        "port": port or 8080,          # placeholder so render never crashes; Missing gates the deploy
+        "replicas": replicas,
+        "env": env,
+        "secrets": secrets,
+        "command": [str(x) for x in (raw.get("command") or [])],
+        "args": [str(x) for x in (raw.get("args") or [])],
+        "extra_ports": extra,
+        "resources": resources,
+        "probe": _norm_probe(raw.get("health"), port),
+        "volumes": volumes,
+        "run_as_user": _int_or_none(raw.get("run_as_user")),
+        "published": bool(raw.get("published", True)),
+    }
+
+
+def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
+    lines = [f"Stack '{app_name}' → namespace '{ns}', {len(services)} service"
+             f"{'s' if len(services) != 1 else ''}:"]
+    for s in services:
+        bits = [s["image"] or "IMAGE MISSING", f"port {s['port']}", f"{s['replicas']}x"]
+        if s["volumes"]:
+            bits.append(f"{len(s['volumes'])} volume{'s' if len(s['volumes']) != 1 else ''}")
+        lines.append(f"  • {s['name']}: {', '.join(bits)}")
+    if secrets_n:
+        lines.append(f"{secrets_n} secret{'s' if secrets_n != 1 else ''} (redacted).")
+    if vols_n:
+        lines.append(f"{vols_n} persistent volume{'s' if vols_n != 1 else ''}.")
+    return "\n".join(lines)
+
+
+def ingest(json_text: str, defaults: dict | None = None) -> dict:
+    """Parse the dev-AI's returned JSON -> {cfg, missing, summary, warnings}. cfg is ready for
+    /deploy (services[] path). `missing` non-empty means DON'T deploy yet — ask the user only
+    for those fields. Raises ValueError only on structurally unusable input (not on missing
+    values — those are reported, per the 'never assume' rule)."""
+    d = defaults or {}
+    try:
+        doc = json.loads(json_text)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise ValueError(f"that wasn't valid JSON — paste the JSON object your AI returned "
+                         f"(re-run the intake prompt if needed). Parser said: {str(e).splitlines()[0]}")
+    if not isinstance(doc, dict):
+        raise ValueError("expected a JSON object, got a " + type(doc).__name__)
+
+    app = doc.get("application") if isinstance(doc.get("application"), dict) else {}
+    raw_services = doc.get("services")
+    if not raw_services:
+        # allow a flat single-service object (dev-AI dropped the wrapper)
+        if doc.get("image") or doc.get("port") or doc.get("name"):
+            raw_services = [doc]
+        else:
+            raise ValueError("no 'services' found — the JSON must have a \"services\": [...] "
+                             "array (or be a single service object with an \"image\").")
+    if not isinstance(raw_services, list):
+        raise ValueError("'services' must be a JSON array")
+
+    app_name = _k8s_name(app.get("name") or d.get("name") or
+                         (raw_services[0].get("name") if isinstance(raw_services[0], dict) else "") or "app")
+    ns = _k8s_name(app.get("namespace") or d.get("namespace") or "default")
+
+    missing, warns, services, seen = [], [], [], set()
+    for raw in raw_services:
+        if not isinstance(raw, dict):
+            warns.append("skipped a services[] entry that wasn't an object")
+            continue
+        svc = _norm_service(raw, missing, warns)
+        if svc["name"] in seen:
+            warns.append(f"duplicate service name '{svc['name']}' — keeping the first")
+            continue
+        seen.add(svc["name"])
+        services.append(svc)
+    if not services:
+        raise ValueError("no usable services in the JSON")
+
+    secrets_n = sum(len(s["secrets"]) for s in services)
+    vols_n = sum(len(s["volumes"]) for s in services)
+    cfg = {"name": app_name, "namespace": ns, "mode": d.get("mode", "manual"),
+           "services": services, "warnings": warns}
+    return {"cfg": cfg, "missing": missing, "warnings": warns,
+            "summary": _summary(app_name, ns, services, secrets_n, vols_n)}
+
+
+def validate_services(services: list) -> list:
+    """Strict gate for the /deploy passthrough: every service must have a valid name, image,
+    and port (i.e. intake found nothing Missing). Raises ValueError -> 422 on a hand-crafted
+    or incomplete POST. Returns the list unchanged on success."""
+    if not isinstance(services, list) or not services:
+        raise ValueError("services must be a non-empty list")
+    for s in services:
+        if not isinstance(s, dict):
+            raise ValueError("each service must be an object")
+        name = str(s.get("name") or "")
+        if not _RFC1123.match(name):
+            raise ValueError(f"service name '{name}' is not a valid Kubernetes name")
+        img = str(s.get("image") or "")
+        if not img or img.startswith("-") or any(c.isspace() for c in img):
+            raise ValueError(f"service '{name}' has no valid image")
+        port = _int_or_none(s.get("port"))
+        if port is None or not (0 < port < 65536):
+            raise ValueError(f"service '{name}' has no valid port")
+    return services
+
+
+if __name__ == "__main__":
+    prompt = build_prompt({"app_description": "a Django API with Postgres"})
+    assert "services" in prompt and "Return ONLY the JSON" in prompt and "Django" in prompt
+
+    # complete two-service stack -> no missing, correct normalization
+    good = json.dumps({
+        "application": {"name": "shop", "namespace": "prod"},
+        "services": [
+            {"name": "web", "image": "myorg/web:1.2.3", "port": 3000, "replicas": 2,
+             "env": {"APP_ENV": "prod"}, "secrets": {"DB_PASSWORD": "s3cret"},
+             "health": {"type": "http", "path": "/healthz"}, "depends_on": ["db"]},
+            {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+             "env": {"POSTGRES_PASSWORD": "pw"},
+             "volumes": [{"name": "pgdata", "mountPath": "/var/lib/postgresql/data", "size": "2Gi"}]},
+        ],
+    })
+    r = ingest(good, {"mode": "autonomous"})
+    assert r["missing"] == [], r["missing"]
+    assert r["cfg"]["name"] == "shop" and r["cfg"]["namespace"] == "prod"
+    assert r["cfg"]["mode"] == "autonomous"
+    web = next(s for s in r["cfg"]["services"] if s["name"] == "web")
+    db = next(s for s in r["cfg"]["services"] if s["name"] == "db")
+    assert web["port"] == 3000 and web["replicas"] == 2
+    assert web["secrets"] == {"DB_PASSWORD": "s3cret"} and web["env"] == {"APP_ENV": "prod"}
+    assert web["probe"] == {"type": "http", "path": "/healthz"}, web["probe"]
+    assert db["probe"] == {"type": "tcp"}, db["probe"]                       # no health, has port
+    assert db["env"] == {} and db["secrets"] == {"POSTGRES_PASSWORD": "pw"}  # secret auto-classified out of env
+    assert db["volumes"][0]["size"] == "2Gi"
+    validate_services(r["cfg"]["services"])                                  # passes the strict gate
+
+    # a credential left in env is moved to secrets
+    r2 = ingest(json.dumps({"services": [{"name": "a", "image": "a:1", "port": 8080,
+                                          "env": {"API_TOKEN": "t"}}]}))
+    a = r2["cfg"]["services"][0]
+    assert a["secrets"] == {"API_TOKEN": "t"} and a["env"] == {}, a
+
+    # missing image + bad port -> reported, not assumed
+    r3 = ingest(json.dumps({"services": [{"name": "web", "port": "the-main-one"}]}))
+    fields = {(m["service"], m["field"]) for m in r3["missing"]}
+    assert ("web", "image") in fields and ("web", "port") in fields, r3["missing"]
+
+    # name coercion
+    r4 = ingest(json.dumps({"services": [{"name": "My App", "image": "i:1", "port": 80}]}))
+    assert r4["cfg"]["services"][0]["name"] == "my-app", r4["cfg"]["services"][0]["name"]
+
+    # malformed input
+    for bad in ["not json", "[]", "{}", json.dumps({"application": {}})]:
+        try:
+            ingest(bad)
+            assert False, f"should have raised on {bad!r}"
+        except ValueError:
+            pass
+
+    # strict gate rejects an incomplete service
+    try:
+        validate_services([{"name": "x", "image": "", "port": 80}])
+        assert False, "should reject missing image"
+    except ValueError:
+        pass
+
+    print("intake.py self-check OK")

@@ -195,6 +195,23 @@
         <div style="margin-top:6px"><label>docker-compose.yml <span style="color:var(--faint);font-weight:400">(paste — deploys every service; overrides Image/Git above)</span></label>
           <textarea name="compose" rows="6" placeholder="services:&#10;  web:&#10;    image: nginx:1.27&#10;    ports: ['8080:80']&#10;  db:&#10;    image: postgres:16&#10;    environment: {POSTGRES_PASSWORD: pw}" style="width:100%;font-family:var(--mono);font-size:.78rem"></textarea></div>
       </details>
+      <details style="margin-top:6px" id="intake-wrap"><summary style="cursor:pointer;color:var(--faint);font-size:.8rem">Guided setup — let the AI that built your app hand over all deploy info</summary>
+        <div style="margin-top:6px">
+          <div class="mini" style="margin-bottom:4px">Is your app containerized (has a built image)?</div>
+          <div class="fbtns" style="margin-bottom:6px">
+            <button class="btn" id="intk-yes" type="button">Yes — get the intake prompt</button>
+            <button class="btn ghost" id="intk-no" type="button">Not yet — get a containerization prompt</button>
+          </div>
+          <label class="mini">1 · Copy this prompt to the AI that built your app</label>
+          <textarea id="intk-prompt" rows="5" readonly placeholder="click a button above" style="width:100%;font-family:var(--mono);font-size:.75rem"></textarea>
+          <label class="mini" style="margin-top:6px">2 · Paste the JSON it returns</label>
+          <textarea id="intk-resp" rows="5" placeholder='{ "services": [ { "name": "web", "image": "org/web:1.2.3", "port": 3000 } ] }' style="width:100%;font-family:var(--mono);font-size:.75rem"></textarea>
+          <div class="fbtns" style="margin-top:6px"><button class="btn" id="intk-ingest" type="button">Read response</button></div>
+          <div class="out" id="intk-summary" style="white-space:pre-wrap"></div>
+          <div id="intk-missing"></div>
+          <div class="fbtns" id="intk-deploy-row" style="display:none;margin-top:6px"><button class="btn primary" id="intk-deploy" type="button">Deploy this stack — show everything</button></div>
+        </div>
+      </details>
       <label class="mini" style="display:flex;align-items:center;gap:6px;margin-top:6px;color:var(--faint)">
         <input type="checkbox" id="allow-vuln"> Deploy even if the image scan finds CRITICAL/HIGH vulnerabilities (public images like postgres/nginx usually have some)</label>
       <div class="fbtns">
@@ -225,6 +242,7 @@
     <div class="side">
       <div class="panel"><div class="phd"><h3>Generated files</h3></div><div id="files"><div class="empty">rendered manifests appear here</div></div></div>
       <div class="panel"><div class="phd"><h3>Health</h3></div><div class="pods" id="pods"><div class="empty">pods appear after deploy</div></div></div>
+      <div class="panel"><div class="phd"><h3>Alerts</h3></div><div id="alerts"><div class="empty">pod failures &amp; blockers show here, each with a recommended fix</div></div></div>
       <div class="panel"><div class="phd"><h3>Resources</h3></div><div id="res"><div class="empty">metrics appear when live</div></div></div>
       <div class="panel"><div class="phd"><h3>Endpoint</h3></div><div class="endpoint pending" id="ep"><div class="lbl">Available after rollout</div><div class="url" id="ep-url">waiting…</div></div></div>
     </div>
@@ -344,6 +362,16 @@
     return b;
   }
 
+  // Alerts panel — a consolidated feed of failures/blockers with a recommended fix.
+  // Pure surfacing of events already streaming (no new detection); severity by colour.
+  function addAlert(color,title,detail){
+    var box=$("alerts");var em=box.querySelector(".empty");if(em)em.parentNode.removeChild(em);
+    var a=el("div");a.style.cssText="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)";
+    var dot=el("span");dot.style.cssText="flex:0 0 8px;height:8px;width:8px;border-radius:50%;margin-top:5px;background:"+color;
+    var body=el("div");body.style.minWidth="0";body.appendChild(el("div",null,title));
+    if(detail){var d=el("div","mini",detail);d.style.color="var(--faint)";body.appendChild(d);}
+    a.appendChild(dot);a.appendChild(body);box.insertBefore(a,box.firstChild);
+  }
   function setStatus(s,t){$("status").dataset.s=s;$("status-t").textContent=t;}
   function nowBanner(title,sub,bar){var n=$("now");n.style.display="flex";$("now-title").textContent=title;$("now-sub").textContent=sub?" — "+sub:"";$("now-bar").textContent=bar||"";}
 
@@ -402,10 +430,12 @@
     if(t==="stage_enter"){ stageEnter(ev.stage); setStatus("working",ev.stage+" — "+(SAY[ev.stage]||"working")); nowBanner("Agent", SAY[ev.stage]||ev.stage, $("now-bar").textContent); }
     else if(t==="stage_exit"){ var o=stg[ev.stage]; if(o && !o.box.classList.contains("failed"))setStage(ev.stage,"done"); }
     else if(t==="error"){ setStage(ev.stage,"failed"); setStatus("error",ev.stage+" failed"); }
-    else if(t==="escalation"){ setStatus("error","needs a human"); }
+    else if(t==="failure"){ var fd=ev.data||{}; addAlert("#e5484d",(fd.type||"Pod failure")+" — "+(fd.pod||ev.stage),ev.message||fd.message||""); }
+    else if(t==="escalation"){ setStatus("error","needs a human"); addAlert("#e5484d","Escalated — needs a human",ev.message||""); }
     else if(t==="approval_required"){ curName=(ev.data&&ev.data.name)||curName; curNs=(ev.data&&ev.data.namespace)||curNs;
       var q=$("approve-q"); q.textContent=""; q.appendChild(el("b",null,"Approval needed. ")); q.appendChild(document.createTextNode(ev.message)); $("approve").classList.add("on"); setStatus("waiting","waiting for your approval"); }
-    else if(t==="guidance"){ setStatus("waiting","blocked — fix needed (see console)"); }
+    else if(t==="guidance"){ setStatus("waiting","blocked — fix needed (see console)");
+      var gi=(ev.data&&ev.data.items&&ev.data.items[0])||{}; addAlert("#f5a623",ev.message||"Action needed",gi.fix||""); }
     else if(t==="endpoint"){ setStage("Verify","done"); setStatus("live","live & healthy"); var d=ev.data||{};
       var multi=!!d.service_name;   // compose stack: one endpoint event per published service
       var ep=$("ep"); ep.className="endpoint"; var u=$("ep-url"); if(!multi) u.textContent="";
@@ -451,6 +481,7 @@
     stream.textContent="";emptyShown=false;lastRow=null;
     $("files").textContent="";$("files").appendChild(el("div","empty","rendering…"));
     $("pods").textContent="";$("pods").appendChild(el("div","empty","waiting for pods"));
+    $("alerts").textContent="";$("alerts").appendChild(el("div","empty","pod failures & blockers show here, each with a recommended fix"));
     $("res").textContent="";$("res").appendChild(el("div","empty","waiting for metrics"));
     $("ep").className="endpoint pending";$("ep-url").textContent="waiting…";
     $("approve").classList.remove("on");fwdKeys=[];
@@ -506,6 +537,58 @@
   $("ca-btn").onclick=function(){$("ask-out").textContent="asking…";
     fetch("/advise-config",{method:"POST",headers:authHeaders(),body:JSON.stringify({name:val("name"),image:val("image")})})
     .then(function(r){return r.json();}).then(function(d){$("ask-out").textContent=(d.summary?d.summary+"\n":"")+((d.suggestions||[]).map(function(s){return s.field+": "+s.value+" — "+s.reason;}).join("\n"));}).catch(function(e){$("ask-out").textContent="unavailable: "+e;});};
+
+  // ---- guided structured intake (developer-as-bridge: Phase 1) ----
+  var intakeCfg=null;
+  $("intk-yes").onclick=function(){$("intk-prompt").value="loading…";
+    fetch("/intake/prompt",{method:"POST",headers:authHeaders(),body:JSON.stringify({app_description:$("ob-desc").value||val("name")})})
+    .then(function(r){return r.json();}).then(function(d){$("intk-prompt").value=d.prompt||JSON.stringify(d,null,2);}).catch(function(e){$("intk-prompt").value="unavailable: "+e;});};
+  $("intk-no").onclick=function(){$("intk-prompt").value="loading…";
+    fetch("/onboard",{method:"POST",headers:authHeaders(),body:JSON.stringify({app_description:$("ob-desc").value})})
+    .then(function(r){return r.json();}).then(function(d){$("intk-prompt").value=(d.containerization_prompt||JSON.stringify(d,null,2))+"\n\n— once the image is built, click 'Yes' above and paste its JSON response below.";}).catch(function(e){$("intk-prompt").value="unavailable: "+e;});};
+  $("intk-ingest").onclick=function(){
+    $("intk-summary").textContent="reading…";$("intk-missing").textContent="";$("intk-deploy-row").style.display="none";intakeCfg=null;
+    fetch("/intake/ingest",{method:"POST",headers:authHeaders(),body:JSON.stringify({response:$("intk-resp").value,name:val("name"),namespace:val("namespace")||"default",mode:mode})})
+    .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})
+    .then(function(x){
+      if(!x.ok){$("intk-summary").textContent="Couldn't read that: "+(x.d.detail||"error");return;}
+      intakeCfg=x.d.cfg;
+      var w=(x.d.warnings&&x.d.warnings.length)?("\n⚠ "+x.d.warnings.join("\n⚠ ")):"";
+      $("intk-summary").textContent=x.d.summary+w;
+      renderMissing(x.d.missing||[]);
+    }).catch(function(e){$("intk-summary").textContent="unavailable: "+e;});};
+  function renderMissing(missing){
+    var box=$("intk-missing");box.textContent="";
+    if(!missing.length){$("intk-deploy-row").style.display="";return;}
+    var h=document.createElement("div");h.className="mini";h.style.margin="6px 0 2px";
+    h.textContent="Fill the values the AI didn't provide (asked once, only for what's missing):";box.appendChild(h);
+    missing.forEach(function(m){
+      var row=document.createElement("div");row.style.margin="3px 0";
+      var lab=document.createElement("label");lab.className="mini";
+      lab.textContent=m.service+" → "+m.field+(m.hint?(" ("+m.hint+")"):"");
+      var inp=document.createElement("input");inp.className="intk-missing-in";
+      inp.setAttribute("data-svc",m.service);inp.setAttribute("data-field",m.field);inp.style.width="100%";
+      row.appendChild(lab);row.appendChild(inp);box.appendChild(row);});
+    $("intk-deploy-row").style.display="";}
+  $("intk-deploy").onclick=function(){
+    if(!intakeCfg)return;
+    var bad=[];var inputs=document.querySelectorAll(".intk-missing-in");
+    inputs.forEach(function(inp){
+      var v=inp.value.trim(),sn=inp.getAttribute("data-svc"),fld=inp.getAttribute("data-field");
+      var svc=null;intakeCfg.services.forEach(function(s){if(s.name===sn)svc=s;});
+      if(!svc)return;
+      if(fld==="port"){var p=parseInt(v,10);if(p>0)svc.port=p;else bad.push(sn+" port");}
+      else if(fld==="image"){if(v)svc.image=v;else bad.push(sn+" image");}
+      else{svc[fld]=v;}});
+    if(bad.length){$("intk-summary").textContent="Still missing/invalid: "+bad.join(", ");return;}
+    curName=intakeCfg.name;curNs=intakeCfg.namespace;curReplicas=1;
+    $("m-name").textContent=curName;$("m-ns").textContent=curNs;
+    $("m-img").textContent=intakeCfg.services.map(function(s){return s.image;}).join(", ");
+    resetView();setStatus("working","starting…");nowBanner("Coordinator","routing work to the tools","");$("formwrap").open=false;
+    fetch("/deploy",{method:"POST",headers:authHeaders(),body:JSON.stringify({
+      name:intakeCfg.name,namespace:intakeCfg.namespace,mode:intakeCfg.mode||mode,
+      services:intakeCfg.services,cluster:val("cluster")||"",allow_vulnerable:$("allow-vuln").checked
+    })}).catch(function(){setStatus("error","couldn't reach backend");});};
 
   // ---- auth / RBAC ----
   function showLogin(on){$("authov").classList.toggle("on",on);}
