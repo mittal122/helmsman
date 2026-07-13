@@ -13,7 +13,7 @@ from coordinator import run as coordinator_run
 from approvals import Approvals
 from monitors import Monitors
 from agents import onboarding, config_advisor
-from tools import rollback, cluster, portforward, builder, compose
+from tools import rollback, cluster, portforward, builder, compose, inspect as image_inspect
 import intake
 from breakers import Breaker
 import logging
@@ -347,6 +347,24 @@ async def intake_ingest(req: IntakeIngestRequest):
         return intake.ingest(req.response, {"name": req.name, "namespace": req.namespace, "mode": req.mode})
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+class InspectRequest(BaseModel):
+    services: list[dict] = []
+
+@app.post("/intake/inspect", dependencies=[Depends(auth.require_token)])
+async def intake_inspect(req: InspectRequest):
+    # CHANGE 5: docker-inspect each image and prefill ports/user/volumes, so we ask the human
+    # only for what inspection can't know. Best-effort; re-validates to recompute the questions.
+    warns: list = []
+    for s in req.services:
+        img = s.get("image")
+        if not img:
+            continue
+        insp = await asyncio.to_thread(image_inspect.inspect_image, img)
+        image_inspect.prefill_service(s, insp, warns)
+    val = intake.validate_manifest(req.services, [], warns)
+    return {"services": req.services, "questions": val["questions"],
+            "errors": val["errors"], "warnings": warns}
 
 @app.post("/kubeconfigs", dependencies=[Depends(auth.require_role("admin"))])
 async def add_kubeconfig(req: KubeconfigRequest):

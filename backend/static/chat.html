@@ -233,6 +233,19 @@
         eb.bubble.appendChild(el("div","hint","Fix these in the JSON (or ask your app's AI to), then paste the corrected manifest."));
         return buttons([{label:"Paste corrected manifest →", fn:askPaste},{label:"Start over", cls:"ghost", fn:restart}]);
       }
+      // CHANGE 5: prefill missing port/user/volumes from the images before asking the human.
+      var canInspect=(S.missing||[]).some(function(m){return /port|volume|run_as_user/.test(m.field);})
+                     && (S.services||[]).some(function(s){return s.image;});
+      if(canInspect){
+        bot("Let me check the images to fill in what I can…");
+        waiting();
+        api("/intake/inspect",{services:S.services}).then(function(x2){
+          if(x2.ok){ S.services=x2.d.services; S.cfg.services=x2.d.services; S.missing=x2.d.questions||[];
+            if(x2.d.warnings&&x2.d.warnings.length){ bot("From the images: "+x2.d.warnings.join("; ")); } }
+          askNextMissing();
+        }).catch(function(){ askNextMissing(); });
+        return;
+      }
       askNextMissing();
     }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:askPaste}]); });
   }

@@ -70,3 +70,28 @@ def test_smoke_error_report_never_leaks_secret_values(monkeypatch):
     assert "supersecret" not in str(rep)              # values never appear
     assert rep["last_log_lines"][-1] == "FATAL: boom"  # LAST lines (the exception)
     assert rep["pod_events"] == ["BackOff: restarting"]
+
+def test_image_inspection_prefill():
+    from tools import inspect as im
+    svc = {"name": "web", "workload": "deployment", "port": 8080, "run_as_user": None, "volumes": []}
+    filled = im.prefill_service(svc, {"ports": [3000, 9090], "user": "1001",
+                                      "user_numeric": 1001, "user_is_named": False,
+                                      "volumes": ["/data"]}, [])
+    assert svc["port"] == 3000 and svc["run_as_user"] == 1001 and svc["volumes"][0]["mountPath"] == "/data"
+    assert set(filled) == {"port", "run_as_user", "volumes"}
+    # a named (non-numeric) user is flagged, not silently used
+    w = []
+    im.prefill_service({"name": "a", "run_as_user": None}, {"user": "node", "user_is_named": True}, w)
+    assert any("named user 'node'" in x for x in w)
+
+def test_intake_inspect_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    import main
+    monkeypatch.setattr(main.image_inspect, "inspect_image",
+                        lambda img, **k: {"ports": [3000], "user_numeric": 1001, "user_is_named": False, "volumes": []})
+    with TestClient(main.app) as c:
+        r = c.post("/intake/inspect", json={"services": [
+            {"name": "web", "image": "org/web:1", "workload": "deployment", "port": 8080, "run_as_user": None}]})
+        assert r.status_code == 200
+        s = r.json()["services"][0]
+        assert s["port"] == 3000 and s["run_as_user"] == 1001
