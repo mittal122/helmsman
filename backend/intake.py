@@ -121,10 +121,23 @@ def build_prompt(context: dict | None = None) -> str:
              "check, resource requests/limits, replicas, volumes, and any startup command.")
     L.append("- If a service is reachable from a browser and needs a public URL, give its "
              "\"ingress\" host. If it should autoscale on CPU, give \"scaling\" min/max/cpu.")
-    L.append("- Put sensitive values (passwords, tokens, API keys) under \"secrets\", not \"env\".")
+    L.append("- Put sensitive values (passwords, tokens, API keys) under \"secrets\", not \"env\". "
+             "A connection string/URL that embeds a password (e.g. DATABASE_URL) is a secret too.")
+    L.append("- CROSS-SERVICE HOSTS: when one service connects to another (app→database, "
+             "app→cache, worker→queue), set its host to the OTHER service's \"name\" — never "
+             "\"localhost\"/\"127.0.0.1\". In Kubernetes each service reaches another by its name "
+             "(e.g. host \"postgres\", port 5432).")
+    L.append("- A database and the app that uses it must share the SAME password value (put it in "
+             "both services' secrets). A database also needs its own init password "
+             "(e.g. POSTGRES_PASSWORD) or it won't start.")
+    L.append("- Health checks: use \"http\" only for web services. A database or other non-HTTP "
+             "service must use \"tcp\" (or \"exec\"), never \"http\".")
+    L.append("- A service that stores data (a database) must have a \"volumes\" entry for its data "
+             "directory, or it loses data and may fail to start.")
     L.append("- If you genuinely don't know a value, use null — do NOT guess. The agent will "
              "ask me only for what's missing.")
-    L.append("- Return ONLY the JSON object, no prose around it.")
+    L.append("- Return ONLY the JSON object as STRICT JSON — no prose, and no // comments (the "
+             "notes in the example below are for you; do not include them).")
     L.append("")
     L.append("## Return exactly this shape")
     L.append("```json")
@@ -256,6 +269,22 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
             volumes.append({"name": _k8s_name(v.get("name") or "data"),
                             "mountPath": str(v["mountPath"]), "size": str(v.get("size") or "1Gi")})
 
+    # Correctness rules for a known database image (prevents the common DB crash-loops):
+    is_db = bool(image and diagnostics.db_password_field(image))
+    probe = _norm_probe(raw.get("health"), port)
+    if is_db:
+        # C3: a DB isn't an HTTP server — an http probe keeps it un-ready forever. Force tcp.
+        if probe.get("type") == "http":
+            probe = {"type": "tcp"} if port else {"type": "none"}
+            warns.append(f"{label}: a database can't use an HTTP health check — switched it to a TCP check.")
+        # C4: a DB needs a volume for its data dir (data loss + it fails the read-only-root policy
+        # and crash-loops otherwise). Auto-attach the right one so the user isn't asked.
+        if not volumes:
+            dp = diagnostics.db_data_path(image)
+            if dp:
+                volumes.append({"name": _k8s_name(name + "-data"), "mountPath": dp, "size": "1Gi"})
+                warns.append(f"{label}: added a 1Gi volume at {dp} to keep the database's data.")
+
     # ingress host (browser-facing) and CPU autoscaling — the chart already renders both from
     # these cfg keys (manifests.build_values), so no chart change is needed.
     # ServiceAccount + namespaced RBAC — the chart renders a SA (with cloud-workload-identity
@@ -295,7 +324,7 @@ def _norm_service(raw: dict, missing: list, warns: list) -> dict:
         "args": [str(x) for x in (raw.get("args") or [])],
         "extra_ports": extra,
         "resources": resources,
-        "probe": _norm_probe(raw.get("health"), port),
+        "probe": probe,
         "volumes": volumes,
         "run_as_user": _int_or_none(raw.get("run_as_user")),
         "published": served and bool(raw.get("published", True)),
@@ -342,6 +371,66 @@ def _summary(app_name, ns, services, secrets_n, vols_n) -> str:
     return "\n".join(lines)
 
 
+# C1 — cross-service networking. In Kubernetes a service reaches another by its NAME, not
+# localhost. An app-AI (or a compose habit) that leaves "localhost" in a connection env is the
+# #1 cause of connection-refused crash-loops. We rewrite it to the target service's name when we
+# can identify one with confidence, and warn otherwise. Bind-style keys with no dependency hint
+# are left alone (they may legitimately be the service's own listen address).
+_DEP_KIND = {
+    "db":    ("db", "database", "postgres", "pg", "sql", "mysql", "maria", "cockroach"),
+    "redis": ("redis", "cache"),
+    "mongo": ("mongo",),
+    "queue": ("queue", "amqp", "rabbit", "kafka", "nats", "broker"),
+}
+_ALL_DEP_HINTS = tuple(h for hints in _DEP_KIND.values() for h in hints)
+
+def _is_kind(svc: dict, kind: str) -> bool:
+    img, nm = (svc.get("image") or "").lower(), svc.get("name", "").lower()
+    if kind == "db":
+        return bool(diagnostics.db_password_field(svc.get("image", ""))) or any(t in nm for t in ("db", "postgres", "sql"))
+    hints = _DEP_KIND.get(kind, ())
+    return any(h in img or h in nm for h in hints)
+
+def _conn_target(key: str, others: list) -> str:
+    lk = key.lower()
+    toks = set(re.split(r"[^a-z0-9]+", lk))
+    # a sibling service name used as a token in the key -> highest confidence (e.g. POSTGRES_HOST)
+    for s in others:
+        if len(s["name"]) >= 2 and s["name"] in toks:
+            return s["name"]
+    url_ish = bool(toks & {"url", "uri", "dsn", "endpoint", "connection", "conn"})
+    if not (url_ish or any(h in lk for h in _ALL_DEP_HINTS)):
+        return ""   # bare host/addr with no dependency hint -> maybe a self-bind, don't touch
+    for kind, hints in _DEP_KIND.items():
+        if any(h in lk for h in hints):
+            cand = [s for s in others if _is_kind(s, kind)]
+            if len(cand) == 1:
+                return cand[0]["name"]
+    if url_ish and len(others) == 1:
+        return others[0]["name"]
+    return ""
+
+def _rewire_cross_service(services: list, warns: list) -> None:
+    names = [s["name"] for s in services]
+    for svc in services:
+        others = [s for s in services if s["name"] != svc["name"]]
+        if not others:
+            continue
+        for bag in ("env", "secrets"):
+            for k, v in list(svc[bag].items()):
+                val = str(v)
+                if "localhost" not in val.lower() and "127.0.0.1" not in val:
+                    continue
+                tgt = _conn_target(k, others)
+                if tgt:
+                    svc[bag][k] = re.sub(r"(?i)localhost|127\.0\.0\.1", tgt, val)
+                    warns.append(f"{svc['name']}: {k} pointed at localhost — rewired to service "
+                                 f"'{tgt}' (Kubernetes reaches services by name). Double-check it.")
+                else:
+                    warns.append(f"{svc['name']}: {k} points at localhost — in Kubernetes set it to "
+                                 f"the target service's name (one of: {', '.join(n for n in names if n != svc['name'])}).")
+
+
 def ingest(json_text: str, defaults: dict | None = None) -> dict:
     """Parse the dev-AI's returned JSON -> {cfg, missing, summary, warnings}. cfg is ready for
     /deploy (services[] path). `missing` non-empty means DON'T deploy yet — ask the user only
@@ -385,6 +474,8 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
         services.append(svc)
     if not services:
         raise ValueError("no usable services in the JSON")
+
+    _rewire_cross_service(services, warns)   # C1: localhost -> target service name
 
     secrets_n = sum(len(s["secrets"]) for s in services)
     vols_n = sum(len(s["volumes"]) for s in services)

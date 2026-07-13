@@ -90,6 +90,42 @@ def test_ingest_build_without_repo_is_missing_and_rejected():
         intake.validate_services([{"name": "api", "image": "", "port": 80, "build": {"subdir": "x"}}])
 
 
+def test_c1_rewires_localhost_to_service_name():
+    # backend points DB_HOST at localhost; there's a postgres sibling -> rewired to 'db'
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "backend", "image": "org/api:1", "port": 8000,
+         "env": {"DB_HOST": "localhost", "APP_ENV": "prod"},
+         "secrets": {"DATABASE_URL": "postgres://u:p@localhost:5432/app"}},
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+         "secrets": {"POSTGRES_PASSWORD": "pw"}}]}))
+    be = next(s for s in r["cfg"]["services"] if s["name"] == "backend")
+    assert be["env"]["DB_HOST"] == "db"                              # bare host rewired
+    assert "@db:5432" in be["secrets"]["DATABASE_URL"]              # URL host rewired
+    assert be["env"]["APP_ENV"] == "prod"                           # untouched
+    assert any("rewired to service 'db'" in w for w in r["warnings"])
+
+def test_c1_leaves_self_bind_alone_but_warns_when_ambiguous():
+    # a bare HOST with no dependency hint and 2 candidates -> not rewritten, just warned
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "env": {"HOST": "localhost"}},
+        {"name": "api", "image": "org/api:1", "port": 8000},
+        {"name": "worker", "image": "org/w:1", "type": "worker"}]}))
+    web = next(s for s in r["cfg"]["services"] if s["name"] == "web")
+    assert web["env"]["HOST"] == "localhost"                         # not rewritten (self-bind risk)
+    assert any("points at localhost" in w for w in r["warnings"])
+
+def test_c3_c4_database_probe_and_volume_autofixed():
+    # a DB with an http health check and no volume -> tcp probe + a data volume auto-attached
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "db", "image": "postgres:16", "port": 5432, "published": False,
+         "secrets": {"POSTGRES_PASSWORD": "pw"},
+         "health": {"type": "http", "path": "/"}}]}))
+    db = r["cfg"]["services"][0]
+    assert db["probe"] == {"type": "tcp"}                            # C3: http -> tcp
+    assert db["volumes"] and db["volumes"][0]["mountPath"] == "/var/lib/postgresql/data"  # C4
+    assert r["missing"] == []
+
+
 def test_ingest_flags_database_missing_password():
     # a postgres service with no password -> asked for up front (Missing), so it can't crash-loop
     r = intake.ingest(json.dumps({"services": [

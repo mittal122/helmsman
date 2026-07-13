@@ -200,6 +200,25 @@ def db_password_field(image: str) -> str:
             return accepted[0]
     return ""
 
+# a stateful image -> the directory it writes its data to. Used to auto-attach the right volume
+# (a DB with no volume loses data AND fails the read-only-root policy -> crash-loop).
+_DB_DATA_PATH = [
+    (("postgres", "postgis", "timescale", "pgvector"), "/var/lib/postgresql/data"),
+    (("mariadb", "mysql", "percona"), "/var/lib/mysql"),
+    (("mongo",), "/data/db"),
+    (("redis",), "/data"),
+    (("elasticsearch", "opensearch"), "/usr/share/elasticsearch/data"),
+    (("rabbitmq",), "/var/lib/rabbitmq"),
+]
+
+def db_data_path(image: str) -> str:
+    """The data directory a known stateful image writes to (else '')."""
+    img = (image or "").lower()
+    for names, path in _DB_DATA_PATH:
+        if any(n in img for n in names):
+            return path
+    return ""
+
 
 def _one(issue: str) -> dict:
     low = issue.lower()
