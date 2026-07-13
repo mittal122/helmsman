@@ -606,4 +606,10 @@ async def events():
 
 @app.get("/")
 async def root():
+    # the guided conversation is the default developer experience
+    return FileResponse(os.path.join(STATIC, "chat.html"))
+
+@app.get("/expert")
+async def expert():
+    # the dashboard form, kept for power users
     return FileResponse(os.path.join(STATIC, "index.html"))

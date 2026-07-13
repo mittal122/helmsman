@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman — Guided Deploy</title>
+<style>
+  :root{
+    --ground:#0C1218; --panel:#131C25; --panel-2:#1A2530; --raise:#20303C;
+    --ink:#E9EFF3; --muted:#93A4B3; --faint:#647585; --border:#243441;
+    --accent:#2DD4BF; --accent-dim:#15413B; --good:#34D399; --good-dim:#0F3D31;
+    --warn:#F5A623; --bad:#E5484D; --bad-dim:#3A1618;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  :root[data-theme="light"]{
+    --ground:#EEF2F5; --panel:#FFFFFF; --panel-2:#F4F7F9; --raise:#EAEFF3;
+    --ink:#0F1A22; --muted:#516170; --faint:#8494A2; --border:#DDE5EB;
+    --accent:#0F766E; --accent-dim:#DCEFEC; --good:#15803D; --good-dim:#DCF2E5;
+    --warn:#B45309; --bad:#B91C1C; --bad-dim:#FBE3E3;
+  }
+  @media (prefers-color-scheme: light){ :root:not([data-theme]){
+    --ground:#EEF2F5; --panel:#FFFFFF; --panel-2:#F4F7F9; --raise:#EAEFF3;
+    --ink:#0F1A22; --muted:#516170; --faint:#8494A2; --border:#DDE5EB;
+    --accent:#0F766E; --accent-dim:#DCEFEC; --good:#15803D; --good-dim:#DCF2E5;
+    --warn:#B45309; --bad:#B91C1C; --bad-dim:#FBE3E3; }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:5}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700}
+  .brand .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);color:var(--ground);display:flex;align-items:center;justify-content:center;font-size:17px}
+  .brand small{font-family:var(--mono);font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:600;display:block;margin-top:1px}
+  .spacer{flex:1}
+  .nav{display:inline-flex;background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:3px}
+  .nav a{padding:5px 11px;border-radius:6px;text-decoration:none;color:var(--muted);font-size:.72rem;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
+  .nav a.on{background:var(--accent);color:var(--ground)}
+  .icbtn{background:var(--panel-2);border:1px solid var(--border);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:14px}
+  .thread{flex:1;overflow-y:auto;padding:22px 16px 8px;display:flex;flex-direction:column;gap:14px}
+  .row{display:flex;gap:10px;align-items:flex-start;max-width:100%}
+  .row.me{flex-direction:row-reverse}
+  .av{flex:0 0 30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;margin-top:2px}
+  .av.bot{background:var(--accent-dim);color:var(--accent)}
+  .av.me{background:var(--raise);color:var(--muted)}
+  .bubble{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:11px 14px;max-width:88%;white-space:pre-wrap;word-wrap:break-word}
+  .row.me .bubble{background:var(--accent-dim);border-color:var(--accent-dim)}
+  .bubble.warn{border-color:var(--warn)}
+  .bubble.bad{border-color:var(--bad)}
+  .bubble.good{border-color:var(--good)}
+  .info-btn{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;border:1px solid var(--faint);color:var(--faint);font-size:11px;cursor:pointer;margin-left:7px;vertical-align:middle;font-style:italic;font-family:Georgia,serif;user-select:none}
+  .info-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .info-note{margin-top:8px;padding:9px 11px;background:var(--panel-2);border-left:3px solid var(--accent);border-radius:6px;font-size:.85rem;color:var(--muted)}
+  .detbtn{margin-top:8px;font-size:.76rem;color:var(--faint);cursor:pointer;font-family:var(--mono);user-select:none}
+  .detbtn:hover{color:var(--accent)}
+  .details{margin-top:6px;display:none;background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-family:var(--mono);font-size:.74rem;color:var(--muted);max-height:280px;overflow:auto}
+  .details.on{display:block}
+  .details .cmd{color:var(--accent)} .details .ln{white-space:pre-wrap;word-break:break-all}
+  .promptbox{margin-top:9px;background:var(--ground);border:1px solid var(--border);border-radius:8px}
+  .promptbox pre{margin:0;padding:11px;font-family:var(--mono);font-size:.76rem;color:var(--ink);max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .copybtn{display:block;width:100%;border:none;border-top:1px solid var(--border);background:var(--panel-2);color:var(--accent);padding:9px;cursor:pointer;font-weight:600;font-size:.82rem;border-radius:0 0 8px 8px}
+  .copybtn:hover{background:var(--raise)}
+  .endpoint{margin-top:8px}
+  .endpoint a{color:var(--accent);font-family:var(--mono);font-size:.9rem;word-break:break-all}
+  .dock{border-top:1px solid var(--border);background:var(--panel);padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;position:sticky;bottom:0}
+  .btn{background:var(--accent);color:var(--ground);border:none;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer;font-size:.9rem;font-family:inherit}
+  .btn.ghost{background:var(--panel-2);color:var(--ink);border:1px solid var(--border)}
+  .btn.bad{background:var(--bad);color:#fff}
+  .btn:hover{filter:brightness(1.08)}
+  .dock input,.dock textarea{flex:1;min-width:180px;background:var(--ground);border:1px solid var(--border);border-radius:9px;padding:10px 12px;color:var(--ink);font-family:inherit;font-size:.92rem}
+  .dock textarea{font-family:var(--mono);font-size:.8rem;min-height:96px;resize:vertical;width:100%}
+  .dock .hint{width:100%;font-size:.76rem;color:var(--faint);margin-bottom:-2px}
+  .typing{display:inline-flex;gap:4px;padding:4px 0}
+  .typing span{width:6px;height:6px;border-radius:50%;background:var(--faint);animation:b 1.2s infinite}
+  .typing span:nth-child(2){animation-delay:.2s} .typing span:nth-child(3){animation-delay:.4s}
+  @keyframes b{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
+  .settings{position:absolute;right:16px;top:56px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;display:none;z-index:9;width:280px}
+  .settings.on{display:block}
+  .settings label{display:block;font-size:11px;color:var(--faint);margin-bottom:4px}
+  .settings input{width:100%;background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="logo">⎈</span><div>Helmsman<small>guided deploy</small></div></div>
+    <span class="spacer"></span>
+    <nav class="nav"><a href="/" class="on">Guided</a><a href="/expert">Expert</a><a href="/manage">Manage</a></nav>
+    <button class="icbtn" id="theme-btn" title="Theme">◑</button>
+    <button class="icbtn" id="gear" title="Operator token">&#128273;</button>
+  </div>
+  <div class="settings" id="settings"><label>Operator token (only if your server requires one)</label><input id="token" type="password" placeholder="Bearer token"></div>
+  <div class="thread" id="thread"></div>
+  <div class="dock" id="dock"></div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(id){return document.getElementById(id);};
+  var thread=$("thread"), dock=$("dock");
+  var S={ mode:"manual", namespace:"default", containerized:null, image:"", desc:"",
+          cfg:null, missing:[], services:null, name:"", port:0, deployName:"", curStage:null, detailNodes:{} };
+
+  // ---------- token / theme ----------
+  var tokenEl=$("token");
+  try{ tokenEl.value=localStorage.getItem("helmsman_token")||""; }catch(e){}
+  tokenEl.oninput=function(){ try{localStorage.setItem("helmsman_token",tokenEl.value);}catch(e){} };
+  function authHeaders(){ var h={"Content-Type":"application/json"}; if(tokenEl.value)h["Authorization"]="Bearer "+tokenEl.value; return h; }
+  $("gear").onclick=function(){ $("settings").classList.toggle("on"); };
+  (function(){ var t; try{t=localStorage.getItem("helmsman_theme");}catch(e){} if(t)document.documentElement.setAttribute("data-theme",t);
+    $("theme-btn").onclick=function(){ var d=document.documentElement, cur=d.getAttribute("data-theme")==="light"?"dark":"light";
+      d.setAttribute("data-theme",cur); try{localStorage.setItem("helmsman_theme",cur);}catch(e){} }; })();
+
+  // ---------- element helpers (textContent only — never innerHTML for dynamic/cluster data) ----------
+  function el(t,c,txt){ var n=document.createElement(t); if(c)n.className=c; if(txt!=null)n.textContent=txt; return n; }
+  function scroll(){ thread.scrollTop=thread.scrollHeight; }
+
+  // add a bot message. opts: {info, cls, details(bool), promptText, cls}
+  function bot(text, opts){
+    opts=opts||{};
+    var row=el("div","row"); row.appendChild(el("div","av bot","⎈"));
+    var b=el("div","bubble"+(opts.cls?" "+opts.cls:""));
+    var span=el("span",null,text); b.appendChild(span);
+    if(opts.info){ var ib=el("span","info-btn","i"); ib.title="How I'll do this";
+      var note=el("div","info-note",opts.info); note.style.display="none";
+      ib.onclick=function(){ note.style.display=note.style.display==="none"?"block":"none"; scroll(); };
+      span.appendChild(ib); b.appendChild(note); }
+    if(opts.promptText){ b.appendChild(promptBox(opts.promptText)); }
+    var detailsNode=null;
+    if(opts.details){
+      var tog=el("div","detbtn","▸ show what I ran"); var det=el("div","details");
+      tog.onclick=function(){ det.classList.toggle("on"); tog.textContent=(det.classList.contains("on")?"▾ hide details":"▸ show what I ran"); scroll(); };
+      b.appendChild(tog); b.appendChild(det); detailsNode=det;
+    }
+    row.appendChild(b); thread.appendChild(row); scroll();
+    return {bubble:b, details:detailsNode};
+  }
+  function me(text){ var row=el("div","row me"); row.appendChild(el("div","av me","🧑"));
+    row.appendChild(el("div","bubble",text)); thread.appendChild(row); scroll(); }
+  function promptBox(text){
+    var box=el("div","promptbox"); var pre=el("pre",null,text); box.appendChild(pre);
+    var btn=el("button","copybtn","📋 Copy this prompt");
+    btn.onclick=function(){ if(navigator.clipboard)navigator.clipboard.writeText(text);
+      btn.textContent="✓ Copied — paste it to your app's AI"; setTimeout(function(){btn.textContent="📋 Copy this prompt";},2500); };
+    box.appendChild(btn); return box;
+  }
+  function typing(){ var row=el("div","row"); row.appendChild(el("div","av bot","⎈"));
+    var b=el("div","bubble"); var t=el("div","typing"); t.appendChild(el("span"));t.appendChild(el("span"));t.appendChild(el("span"));
+    b.appendChild(t); row.appendChild(b); thread.appendChild(row); scroll(); return row; }
+
+  // ---------- input dock builders ----------
+  function clearDock(){ dock.textContent=""; }
+  function buttons(list){ // [{label,cls,fn}]
+    clearDock();
+    list.forEach(function(o){ var btn=el("button","btn"+(o.cls?" "+o.cls:""),o.label); btn.onclick=function(){ o.fn(); }; dock.appendChild(btn); });
+  }
+  function textInput(placeholder, onSubmit, hint){
+    clearDock();
+    if(hint){ dock.appendChild(el("div","hint",hint)); }
+    var inp=el("input"); inp.placeholder=placeholder||""; var btn=el("button","btn","Send");
+    function go(){ var v=inp.value.trim(); if(v){ onSubmit(v); } }
+    btn.onclick=go; inp.onkeydown=function(e){ if(e.key==="Enter")go(); };
+    dock.appendChild(inp); dock.appendChild(btn); inp.focus();
+  }
+  function textArea(placeholder, label, onSubmit){
+    clearDock();
+    if(label){ dock.appendChild(el("div","hint",label)); }
+    var ta=el("textarea"); ta.placeholder=placeholder||"";
+    var btn=el("button","btn","Read it"); btn.onclick=function(){ var v=ta.value.trim(); if(v)onSubmit(v); };
+    dock.appendChild(ta); dock.appendChild(btn); ta.focus();
+  }
+  function waiting(){ clearDock(); dock.appendChild(el("div","hint","working…")); }
+
+  function api(path, body){
+    return fetch(path,{method:"POST",headers:authHeaders(),body:JSON.stringify(body||{})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); });
+  }
+
+  // =================== the conversation ===================
+  function start(){
+    bot("Hi! I'll get your app running on Kubernetes. You don't need to know anything about Kubernetes — I'll do the work and explain each step. Ready?",
+        {info:"Kubernetes is the system that runs and keeps your app alive across servers. I handle all of it; you just answer a few plain questions."});
+    buttons([{label:"Let's go →", fn:askContainerized}]);
+  }
+
+  function askContainerized(){
+    me("Let's go");
+    bot("First: is your app already containerized — does it have a Docker image?",
+        {info:"A container packages your app so it runs the same anywhere. If you used Docker or your project has a 'Dockerfile', it's containerized. Not sure? Pick that and I'll help you find out."});
+    buttons([
+      {label:"Yes", fn:function(){ S.containerized=true; me("Yes"); startIntake(); }},
+      {label:"Not yet", cls:"ghost", fn:function(){ S.containerized=false; me("Not yet"); askDescribe(); }},
+      {label:"I'm not sure", cls:"ghost", fn:function(){ S.containerized=false; me("I'm not sure"); askDescribe(); }}
+    ]);
+  }
+
+  // ---- NOT-YET path: containerization prompt -> image name -> a couple details ----
+  function askDescribe(){
+    bot("No problem — I'll have the AI that built your app containerize it. In one line, what is your app? (its language/framework helps, e.g. \"a Node.js REST API\")",
+        {info:"I don't read or change your code. I write exact instructions for your app's own AI and use what it produces."});
+    textInput("e.g. a Python Flask API", function(v){ S.desc=v; me(v); makeContainerizePrompt(); }, "Describe your app");
+  }
+  function makeContainerizePrompt(){
+    var t=typing(); waiting();
+    api("/onboard",{app_description:S.desc}).then(function(x){ t.remove();
+      if(!x.ok){ bot("Couldn't prepare that ("+(x.d.detail||x.status)+"). Is the server reachable?",{cls:"bad"}); return buttons([{label:"Try again",fn:makeContainerizePrompt}]); }
+      bot("Copy this and paste it to the AI that built your app (Claude, ChatGPT, Cursor…). It'll containerize your app and give you an image name. Come back when you have it.",
+        {info:"Your app's AI writes a production Dockerfile, builds the image, and prints its name. You bring that name back — that's all I need to run it.", promptText:x.d.containerization_prompt||JSON.stringify(x.d,null,2)});
+      buttons([{label:"I have the image name →", fn:askImageName}]);
+    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:makeContainerizePrompt}]); });
+  }
+  function askImageName(){
+    me("I have the image name");
+    bot("Great — what image name did it give you?",
+        {info:"An image name looks like myorg/myapp:1.0. Kubernetes pulls this exact image to run your app."});
+    textInput("e.g. myorg/myapp:1.0", function(v){ S.image=v; me(v); askAppName(); }, "The image your AI built");
+  }
+  function askAppName(){
+    bot("What should I call this app? (lowercase letters, numbers and dashes)",
+        {info:"This becomes your app's name in the cluster — used to find, update, and roll it back later."});
+    textInput("e.g. my-app", function(v){ S.name=v.toLowerCase(); me(S.name); askPort(); }, "A short name");
+  }
+  function askPort(){
+    bot("Which port does your app listen on? (a number like 3000 or 8080)",
+        {info:"Your app serves traffic on a port. I put it behind a Service and health-check it there, so Kubernetes knows when it's ready."});
+    textInput("e.g. 8080", function(v){ var p=parseInt(v,10); if(!(p>0)){ return; } S.port=p; me(String(p)); confirmSimple(); }, "The port number");
+  }
+  function confirmSimple(){
+    bot("Here's the plan:\n • App: "+S.name+"\n • Image: "+S.image+"\n • Reachable on port "+S.port+"\n • Running with health checks and safe defaults\nShall I deploy it?",
+        {info:"I'll generate the Kubernetes setup from these answers using safe best-practice defaults (health checks, resource limits, non-root), check it, then create it in your cluster."});
+    buttons([
+      {label:"Deploy it →", fn:function(){ me("Deploy it"); deploySimple(); }},
+      {label:"Start over", cls:"ghost", fn:restart}
+    ]);
+  }
+  function deploySimple(){
+    S.deployName=S.name;
+    startDeploy({ name:S.name, image:S.image, port:S.port, namespace:S.namespace, mode:S.mode });
+  }
+
+  // ---- YES path: intake prompt -> paste response -> ingest -> ask missing ----
+  function startIntake(){
+    var t=typing(); waiting();
+    api("/intake/prompt",{app_description:S.desc||""}).then(function(x){ t.remove();
+      if(!x.ok){ bot("Couldn't prepare the prompt ("+(x.d.detail||x.status)+").",{cls:"bad"}); return buttons([{label:"Try again",fn:startIntake}]); }
+      bot("Copy this and paste it to the AI that built your app. It'll hand back everything I need — as one block of text. Paste that back to me.",
+        {info:"Instead of asking you dozens of technical questions, I ask your app's AI once. It knows the ports, environment, database, and everything else — and returns it all in one go.", promptText:x.d.prompt});
+      buttons([{label:"Paste the response →", fn:askPaste}]);
+    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:startIntake}]); });
+  }
+  function askPaste(){
+    me("Paste the response");
+    bot("Paste what your AI gave you below and I'll read everything I need from it.",
+        {info:"I only read the structured answer — I never run it or send it anywhere. If a value is missing, I'll ask you just for that."});
+    textArea('{ "services": [ … ] }', "Paste your AI's JSON response", ingestResponse);
+  }
+  function ingestResponse(txt){
+    me("(pasted the response)");
+    var t=typing(); waiting();
+    api("/intake/ingest",{response:txt, name:S.name||"", namespace:S.namespace, mode:S.mode}).then(function(x){ t.remove();
+      if(!x.ok){ bot("I couldn't read that: "+(x.d.detail||"invalid response")+"\nMake sure you pasted the whole JSON your AI returned.",{cls:"warn"});
+        return buttons([{label:"Paste again", fn:askPaste}]); }
+      S.cfg=x.d.cfg; S.missing=x.d.missing||[]; S.services=x.d.cfg.services;
+      var warn=(x.d.warnings&&x.d.warnings.length)?("\n\nA couple of notes:\n • "+x.d.warnings.join("\n • ")):"";
+      var r=bot("Got it 👍  Here's what I understood:\n"+x.d.summary+warn,
+        {info:"I read your services, images, ports, environment, storage and settings from that response.", details:true});
+      if(r.details){ var ln=el("div","ln",JSON.stringify(x.d.cfg,null,2)); r.details.appendChild(ln); }
+      askNextMissing();
+    }).catch(function(){ t.remove(); bot("Couldn't reach the server.",{cls:"bad"}); buttons([{label:"Try again",fn:askPaste}]); });
+  }
+  function askNextMissing(){
+    if(!S.missing.length){ return confirmStack(); }
+    var m=S.missing[0];
+    bot("Your AI didn't include one thing for \""+m.service+"\": "+m.field+".\n"+(m.hint||"")+"\nDo you know it?",
+        {info:"I ask only for what's genuinely missing — one at a time. If you don't know, your app's AI does; use \"Ask my AI\" and paste its answer."});
+    var dockFns=[{label:"Type it", fn:function(){ answerMissing(m); }},
+                 {label:"Ask my AI →", cls:"ghost", fn:function(){ askAIforField(m); }}];
+    buttons(dockFns);
+  }
+  function answerMissing(m){
+    textInput(m.hint||("value for "+m.field), function(v){
+      me(v); patchMissing(m, v); S.missing.shift(); askNextMissing();
+    }, "For "+m.service+" — "+m.field);
+  }
+  function askAIforField(m){
+    me("Ask my AI");
+    bot("Copy this, paste it to your app's AI, then bring back its answer:",
+        {promptText:"For my app's service \""+m.service+"\", what is the \""+m.field+"\"? "+(m.hint||"")+" Answer with just the value."});
+    buttons([{label:"I have the answer →", fn:function(){ answerMissing(m); }}]);
+  }
+  function patchMissing(m, v){
+    var svc=null; (S.services||[]).forEach(function(s){ if(s.name===m.service)svc=s; });
+    if(!svc)return;
+    if(m.field==="port"){ var p=parseInt(v,10); if(p>0)svc.port=p; }
+    else if(m.field.indexOf(".")>0){ var pp=m.field.split("."); svc[pp[0]]=svc[pp[0]]||{}; svc[pp[0]][pp[1]]=v; }
+    else{ svc[m.field]=v; }
+  }
+  function confirmStack(){
+    S.deployName=(S.cfg&&S.cfg.name)||"app";
+    var lines=(S.services||[]).map(function(s){
+      var what;
+      if(s.workload==="cronjob"){ what="runs on a schedule "+s.schedule; }
+      else if(s.workload==="worker"){ what="a background worker"; }
+      else { what="reachable on port "+s.port; }
+      if(s.build && s.build.git_repo){ what+=" (built from "+s.build.git_repo+")"; }
+      return " • "+s.name+" — "+what;
+    }).join("\n");
+    bot("Here's the full plan:\n"+lines+"\nEverything gets health checks, resource limits and safe defaults. Deploy it?",
+        {info:"I'll turn this into the Kubernetes setup with best-practice defaults, check it's valid and safe, then create it — one service at a time — and wait until each is healthy."});
+    buttons([
+      {label:"Deploy it →", fn:function(){ me("Deploy it"); deployStack(); }},
+      {label:"Start over", cls:"ghost", fn:restart}
+    ]);
+  }
+  function deployStack(){
+    startDeploy({ name:S.deployName, namespace:S.namespace, mode:S.mode, services:S.services });
+  }
+
+  function restart(){ me("Start over"); S={mode:"manual",namespace:"default",containerized:null,image:"",desc:"",cfg:null,missing:[],services:null,name:"",port:0,deployName:"",curStage:null,detailNodes:{}}; askContainerized(); }
+
+  // =================== deploy + live narration ===================
+  var STAGE_TEXT={
+    Detect:"Connecting to your cluster and checking what it supports…",
+    Build:"Building your app's image from source…",
+    Generate:"Preparing your Kubernetes setup…",
+    Validate:"Making sure the settings are valid and safe…",
+    Approve:"Ready to create this in your cluster.",
+    Scan:"Scanning the image for known security issues…",
+    Deploy:"Creating your app in the cluster…",
+    Verify:"Starting it up and checking it's healthy…",
+    Remediate:"Something went wrong — trying to recover safely…",
+    Monitor:"It's running — I'll keep watching it."
+  };
+  var STAGE_INFO={
+    Detect:"I check your cluster is reachable and whether it supports things like public URLs (Ingress) and autoscaling — and quietly skip what it can't do.",
+    Build:"I clone your repo and build the Docker image, then load it into the cluster. No registry needed for a local cluster.",
+    Generate:"I fill a vetted Helm template with your answers — you never write YAML.",
+    Validate:"Three checks run before anything touches the cluster: schema, a server dry-run, and a best-practice score.",
+    Scan:"A vulnerability scan on the image; critical issues block the deploy unless you override.",
+    Deploy:"I apply the setup with Helm so it can be upgraded and rolled back cleanly.",
+    Verify:"I wait for the rollout and the health checks to pass — 'started' isn't the same as 'healthy'.",
+    Monitor:"I watch pods and health continuously and tell you, in plain words, if anything breaks."
+  };
+  function stageName(raw){ return (raw||"").split(":").pop(); } // compose stages look like "web:Deploy"
+
+  function startDeploy(payload){
+    waiting();
+    bot("On it. I'll walk you through it as I go.",{cls:"good"});
+    // Subscribe to the live stream BEFORE starting the deploy, so the first events
+    // (Detect…) aren't lost to a race between /deploy and /events.
+    if(S.es){ try{ S.es.close(); }catch(e){} }
+    var es=new EventSource("/events"); S.es=es;
+    var posted=false;
+    function doPost(){ if(posted)return; posted=true;
+      api("/deploy", payload).then(function(x){
+        if(!x.ok){ try{es.close();}catch(e){} bot("I couldn't start the deploy: "+(x.d.detail||x.status),{cls:"bad"}); return buttons([{label:"Start over",fn:restart}]); }
+        S.deployName=x.d.deployment_id||payload.name;
+      }).catch(function(){ try{es.close();}catch(e){} bot("Couldn't reach the server to start the deploy.",{cls:"bad"}); buttons([{label:"Start over",fn:restart}]); });
+    }
+    es.onopen=doPost;
+    es.onmessage=function(ev){ var d; try{ d=JSON.parse(ev.data); }catch(e){ return; } handle(d, es); };
+    es.onerror=function(){ /* SSE auto-reconnects */ };
+    setTimeout(doPost, 900);   // fallback if onopen is slow/unsupported
+  }
+
+  function detailLine(stage, kind, text){
+    var host=S.detailNodes[stage];
+    if(!host){ var r=bot("Working on "+stage+"…",{details:true}); host=r.details; S.detailNodes[stage]=host; }
+    var ln=el("div","ln"+(kind==="cmd"?" cmd":""), (kind==="cmd"?"$ ":"")+text); host.appendChild(ln); scroll();
+  }
+
+  function handle(ev, es){
+    var t=ev.type, stage=stageName(ev.stage);
+    if(t==="stage_enter"){
+      if(stage==="Approve") return; // handled by approval_required
+      var txt=STAGE_TEXT[stage]|| (ev.message||stage);
+      var r=bot(txt,{info:STAGE_INFO[stage], details:true});
+      S.detailNodes[stage]=r.details; S.curStage=stage;
+    }
+    else if(t==="command"){ detailLine(stage||S.curStage, "cmd", ev.message); }
+    else if(t==="manifest"){ if(ev.data&&ev.data.yaml) detailLine(stage||S.curStage,"yaml",ev.data.yaml.slice(0,4000)); }
+    else if(t==="info"){ detailLine(stage||S.curStage,"info", ev.message); }
+    else if(t==="scan"){ detailLine(stage||S.curStage,"info", ev.message); }
+    else if(t==="cost" && ev.data){ bot("Rough cost estimate: about $"+ev.data.monthly_usd+"/month for what you asked for.",{info:"Estimated from the CPU and memory you requested. It's a guide, not a bill."}); }
+    else if(t==="rollout" && ev.data){ detailLine("Verify","info",(ev.data.service?ev.data.service+": ":"")+(ev.data.ready||0)+"/"+(ev.data.desired||0)+" copies ready"); }
+    else if(t==="approval_required"){
+      bot("Everything checks out. Ready for me to create this in your cluster?",
+          {info:"Nothing has changed in your cluster yet. I only apply it after you say yes."});
+      var nm=(ev.data&&ev.data.name)||S.deployName;
+      buttons([
+        {label:"Yes, create it →", fn:function(){ me("Yes, create it"); api("/approve",{name:nm,approved:true}); waiting(); }},
+        {label:"No, stop", cls:"bad", fn:function(){ me("No, stop"); api("/approve",{name:nm,approved:false}); buttons([{label:"Start over",fn:restart}]); }}
+      ]);
+    }
+    else if(t==="endpoint"){
+      var d=ev.data||{}; var r=bot((d.service_name?d.service_name+" is live! ":"✅ It's live! ")+"Open your app:",{cls:"good"});
+      var wrap=el("div","endpoint");
+      if(d.url && /^https?:\/\//i.test(d.url)){ var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; wrap.appendChild(a); }
+      else{ wrap.appendChild(el("span",null, d.service?(d.service+":"+d.port):(ev.message||"available via port-forward"))); }
+      r.bubble.appendChild(wrap);
+    }
+    else if(t==="error"){
+      var m=ev.message||"Something went wrong.";
+      bot("⚠️ "+m,{cls:"bad"});
+    }
+    else if(t==="guidance"){ showGuidance(ev.data||{}); }
+    else if(t==="failure"){
+      var f=ev.data||{}; bot("⚠️ One of your app's copies is having trouble: "+(f.type||ev.message)+".\nI'm looking into it and will suggest a fix if it doesn't recover.",{cls:"warn"});
+    }
+    else if(t==="escalation"){ bot("I couldn't fix this automatically — it needs a human. "+(ev.message||""),{cls:"bad"}); }
+    else if(t==="remediation"){ bot("✓ "+(ev.message||"Recovered automatically."),{cls:"good"}); }
+    else if(t==="rejected"){ bot("Okay, I stopped — nothing was created.",{cls:"warn"}); buttons([{label:"Start over",fn:restart}]); }
+  }
+
+  function showGuidance(g){
+    var r=bot("Here's what's blocking it and how to fix it:",{cls:"warn"});
+    (g.items||[]).forEach(function(it){
+      r.bubble.appendChild(el("div","ln","• "+(it.problem||"")));
+      r.bubble.appendChild(el("div","ln","  → "+(it.fix||"")));
+    });
+    if(g.fix_prompt){
+      var note=el("div","hint"); note.style.marginTop="8px"; note.textContent="Paste this to the AI that built your app, apply its fix, then come back:";
+      r.bubble.appendChild(note);
+      r.bubble.appendChild(promptBox(g.fix_prompt));
+    }
+    buttons([{label:"I applied the fix — try again →", fn:restart},{label:"Start over", cls:"ghost", fn:restart}]);
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
