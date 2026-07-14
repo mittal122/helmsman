@@ -148,6 +148,35 @@ def test_c2_app_inherits_db_password():
     assert any("differs from the database's password" in w for w in r2["warnings"])
 
 
+def test_universal_autowire_from_framework_env_no_metadata():
+    # a build-from-source frontend with a framework browser env var and NO connects_to at all
+    r = intake.ingest(json.dumps({"application": {"name": "app"}, "services": [
+        {"name": "web", "port": 80, "published": True, "ingress": {"host": "app.example.com"},
+         "build": {"git_repo": "https://github.com/org/app.git", "subdir": "web"},
+         "env": {"VITE_API_URL": "http://localhost:8000"}},
+        {"name": "api", "image": "org/api:1", "port": 8000, "published": False}]}))
+    web = next(s for s in r["cfg"]["services"] if s["name"] == "web")
+    assert web["ingress_routes"] == [{"path": "/api", "service": "api", "port": 8000}]
+    assert web["build_args"] == {"VITE_API_URL": "/api"}      # baked correctly at build
+    assert web["env"]["VITE_API_URL"] == "/api" and r["healing_prompt"] == ""
+
+def test_universal_autowire_prebuilt_baked_heals():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True,
+         "env": {"REACT_APP_API_URL": "http://localhost:8000"}},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    assert "baked into the pre-built image" in r["healing_prompt"]
+
+def test_universal_autowire_ignores_server_env():
+    # a server-side DATABASE_URL must NOT be mistaken for a browser connection
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "api", "image": "org/api:1", "port": 8000, "published": True,
+         "env": {"DATABASE_URL": "postgres://u:p@db:5432/x"}},
+        {"name": "db", "image": "postgres:16", "port": 5432, "secrets": {"POSTGRES_PASSWORD": "p"}}]}))
+    api = next(s for s in r["cfg"]["services"] if s["name"] == "api")
+    assert "ingress_routes" not in api and r["healing_prompt"] == ""
+
+
 def test_browser_backend_wiring_and_ingress_routes():
     # browser→backend: route /api to the backend on the frontend's ingress + inject a relative base
     r = intake.ingest(json.dumps({"application": {"name": "shop"}, "services": [

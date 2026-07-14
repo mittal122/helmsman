@@ -101,13 +101,21 @@ def clone(repo_url: str, branch: str = "", ref: str = "") -> tuple[str, str]:
     sha = _run(["git", "-C", workdir, "rev-parse", "--short", "HEAD"], timeout=30).strip()
     return workdir, sha
 
-def build(workdir: str, image_tag: str, dockerfile: str = "Dockerfile") -> None:
+_ARG_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+def build(workdir: str, image_tag: str, dockerfile: str = "Dockerfile", build_args: dict | None = None) -> None:
     if ".." in dockerfile or dockerfile.startswith("/"):
         raise ValueError("invalid dockerfile path")
     df = os.path.join(workdir, dockerfile)
     if not os.path.isfile(df):
         raise ValueError(f"Dockerfile not found in repo: {dockerfile}")
-    _run(["docker", "build", "-t", image_tag, "-f", df, workdir], timeout=BUILD_TIMEOUT_S)
+    args = ["docker", "build", "-t", image_tag, "-f", df]
+    for k, v in (build_args or {}).items():
+        # keys are validated (argv safety); values pass as KEY=VALUE to --build-arg
+        if _ARG_KEY.match(str(k)):
+            args += ["--build-arg", f"{k}={v}"]
+    args.append(workdir)
+    _run(args, timeout=BUILD_TIMEOUT_S)
 
 def make_available(image_tag: str, context: str) -> str:
     """Inject the built image where the cluster can pull it. Returns the method used."""

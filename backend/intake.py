@@ -599,6 +599,70 @@ def validate_manifest(services: list, smoke_tests: list, warns: list) -> dict:
     return {"errors": errors, "questions": questions}
 
 
+# Framework env-var prefixes that are BAKED INTO THE BROWSER BUNDLE at build time. A value that
+# is a URL under one of these keys is, unambiguously, a browser→backend connection — no metadata
+# from the app's AI is needed to know that. This is the universal auto-wiring signal.
+_BROWSER_ENV = re.compile(r"(?i)^(VITE_|REACT_APP_|NEXT_PUBLIC_|NUXT_PUBLIC_|VUE_APP_|NG_|EXPO_PUBLIC_|GATSBY_|PUBLIC_|STORYBOOK_|UMI_APP_|PARCEL_)")
+
+def _url_host_path(v: str) -> tuple[str, str]:
+    v = str(v).strip()
+    if "://" not in v:
+        v = "http://" + v.lstrip("/")
+    try:
+        u = urllib.parse.urlparse(v)
+        return (u.hostname or ""), (u.path or "")
+    except Exception:
+        return "", ""
+
+def _is_url_value(v: str) -> bool:
+    v = str(v).strip()
+    return ("://" in v) or v.lower().startswith(("localhost", "127.0.0.1", "//")) or bool(re.match(r"^[a-z0-9.-]+:\d+", v))
+
+def _auto_wire_env_urls(services: list, warns: list, heal: list) -> None:
+    """UNIVERSAL auto-wiring — no connects_to needed. A published frontend with a framework
+    browser-env var (VITE_/REACT_APP_/NEXT_PUBLIC_/…) whose value is a URL is a browser→backend
+    connection: route it same-origin through the ingress, set a relative base, and (crucially,
+    since we build from source) pass the base as a build-arg so a baked bundle is rebuilt correct.
+    A pre-built baked image can't be changed at deploy -> healing prompt."""
+    by_name = {s["name"]: s for s in services}
+    internal = [s for s in services if not s.get("published")]
+    for s in services:
+        if not s.get("published"):
+            continue
+        for k, v in list((s.get("env") or {}).items()):
+            if not (_BROWSER_ENV.match(k) and _is_url_value(v)):
+                continue
+            host, path = _url_host_path(v)
+            tgt = by_name.get(host) or (internal[0] if len(internal) == 1 else None)
+            if not tgt:
+                heal.append({"service": s["name"], "target": host or "the backend", "path_prefix": path or "/api",
+                             "problem": f"{k} points the browser at '{v}', but I can't tell which service is "
+                                        f"the backend — expose one internal service or name it '{host}'"})
+                continue
+            prefix = "/" + (path.strip("/") or "api")
+            s.setdefault("ingress_routes", []).append({"path": prefix, "service": tgt["name"],
+                                                        "port": int(tgt.get("port") or 8080)})
+            if s.get("build"):                       # build-from-source: rebuild with the right base
+                s.setdefault("build_args", {})[k] = prefix
+                s.setdefault("env", {})[k] = prefix
+                warns.append(f"{s['name']}: auto-wired {k} → {prefix} (same origin) and set it as a build "
+                             f"arg so the bundle is built to reach '{tgt['name']}'.")
+            else:                                    # pre-built image: the value is already baked in
+                heal.append({"service": s["name"], "target": tgt["name"], "path_prefix": prefix,
+                             "problem": f"{k} is baked into the pre-built image and points the browser at "
+                                        f"'{v}'. Rebuild it with {k}={prefix} (or provide a build spec so I "
+                                        f"rebuild it), so the browser reaches '{tgt['name']}' same-origin"})
+    # de-dup routes a service may have gotten from both connects_to and the env scan
+    for s in services:
+        if s.get("ingress_routes"):
+            seen, uniq = set(), []
+            for r in s["ingress_routes"]:
+                key = (r["path"], r["service"])
+                if key not in seen:
+                    seen.add(key); uniq.append(r)
+            s["ingress_routes"] = uniq
+
+
 def _wire_browser_routes(services: list, warns: list) -> list:
     """CONNECTION WIRING — a browser→backend call can't use a cluster service name (the browser
     can't resolve it). Route the frontend's path prefix (e.g. /api) to the backend on ONE ingress
@@ -692,7 +756,8 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
 
     _rewire_cross_service(services, warns)   # C1: localhost -> target service name (server-side)
     _share_db_password(services, warns)      # C2: app inherits the database's password
-    heal = _wire_browser_routes(services, warns)   # browser→backend: ingress path routing + base
+    heal = _wire_browser_routes(services, warns)   # browser→backend from connects_to metadata
+    _auto_wire_env_urls(services, warns, heal)     # UNIVERSAL: auto-wire framework browser env vars
 
     smoke_tests = [t for t in (doc.get("smoke_tests") or []) if isinstance(t, dict)]
     val = validate_manifest(services, smoke_tests, warns)   # CHANGE 2: intake validation

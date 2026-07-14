@@ -546,8 +546,10 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                             await guide("Build", [f"{svc['name']}: multiple Dockerfiles found: {listing}"])
                             return
                     tag = builder.image_tag(f"{stack}-{svc['name']}", sha)
-                    await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} .")
-                    await asyncio.to_thread(builder.build, ctxdir, tag, dockerfile)
+                    bargs = svc.get("build_args") or {}   # auto-wired browser base -> baked correctly
+                    argstr = " ".join(f"--build-arg {k}={v}" for k, v in bargs.items())
+                    await emit("command", "Build", f"docker build -t {tag} -f {dockerfile} {argstr} .".replace("  ", " "))
+                    await asyncio.to_thread(builder.build, ctxdir, tag, dockerfile, bargs)
                     method = await asyncio.to_thread(builder.make_available, tag, kctx)
                     svc["image"] = tag
                     await emit("info", "Build", f"{svc['name']}: built {tag} → available via {method}")
