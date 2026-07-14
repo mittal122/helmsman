@@ -33,8 +33,12 @@ def render_conf(frontend: str, fport: int, routes: list, ns: str) -> str:
     for r in sorted(routes, key=lambda r: -len(str(r["path"]))):
         p = "/" + str(r["path"]).strip("/")
         up = _svc_dns(r["service"], ns, int(r["port"]))
-        L += [f"  location {p}/ {{", f"    proxy_pass {up}/;", *ws, "  }"]
-        L += [f"  location = {p} {{", f"    proxy_pass {up}/;", *ws, "  }"]
+        # proxy_pass WITHOUT a trailing slash/URI => nginx forwards the ORIGINAL request URI
+        # unchanged, i.e. /api/v1/x -> backend:port/api/v1/x. Preserving the prefix matches how a
+        # frontend's own nginx proxies /api; stripping it (proxy_pass .../ ) 404s a backend whose
+        # routes live under /api.
+        L += [f"  location {p}/ {{", f"    proxy_pass {up};", *ws, "  }"]
+        L += [f"  location = {p} {{", f"    proxy_pass {up};", *ws, "  }"]
     L += ["  location / {", f"    proxy_pass {_svc_dns(frontend, ns, fport)};", *ws, "  }", "}"]
     return "\n".join(L)
 
@@ -90,6 +94,10 @@ if __name__ == "__main__":
     conf = render_conf("web", 80, [{"path": "/api", "service": "api", "port": 8000}], "default")
     assert "location /api/" in conf and "api.default.svc.cluster.local:8000" in conf
     assert "location / {" in conf and "web.default.svc.cluster.local:80" in conf
+    # the /api prefix must be PRESERVED (no trailing slash on proxy_pass) so a backend serving
+    # under /api gets /api/v1/... intact, not stripped to /v1/...
+    assert "proxy_pass http://api.default.svc.cluster.local:8000;" in conf
+    assert "proxy_pass http://api.default.svc.cluster.local:8000/;" not in conf
     m = _manifests("shop-gateway", "default", conf, {"x": "y"})
     docs = list(yaml.safe_load_all(m))
     assert [d["kind"] for d in docs] == ["ConfigMap", "Deployment", "Service"]

@@ -221,6 +221,7 @@
       if(!x.ok){ bot("I couldn't read that: "+(x.d.detail||"invalid response")+"\nMake sure you pasted the whole JSON your AI returned.",{cls:"warn"});
         return buttons([{label:"Paste again", fn:askPaste}]); }
       S.cfg=x.d.cfg; S.missing=x.d.missing||[]; S.services=x.d.cfg.services;
+      S.namespace=(x.d.cfg&&x.d.cfg.namespace)||S.namespace;   // honor the namespace from the manifest
       var warn=(x.d.warnings&&x.d.warnings.length)?("\n\nA couple of notes:\n • "+x.d.warnings.join("\n • ")):"";
       var r=bot("Got it 👍  Here's what I understood:\n"+x.d.summary+warn,
         {info:"I read your services, images, ports, environment, storage and settings from that response.", details:true});
@@ -291,15 +292,15 @@
       if(s.build && s.build.git_repo){ what+=" (built from "+s.build.git_repo+")"; }
       return " • "+s.name+" — "+what;
     }).join("\n");
-    bot("Here's the full plan:\n"+lines+"\nEverything gets health checks, resource limits and safe defaults. Deploy it?",
-        {info:"I'll turn this into the Kubernetes setup with best-practice defaults, check it's valid and safe, then create it — one service at a time — and wait until each is healthy."});
+    bot("Here's the full plan (namespace: "+S.namespace+"):\n"+lines+"\nEverything gets health checks, resource limits and safe defaults. I'll create the namespace if it doesn't exist. Deploy it?",
+        {info:"I'll turn this into the Kubernetes setup with best-practice defaults, check it's valid and safe, then create it in namespace '"+S.namespace+"' (created if missing) — one service at a time — and wait until each is healthy."});
     buttons([
       {label:"Deploy it →", fn:function(){ me("Deploy it"); deployStack(); }},
       {label:"Start over", cls:"ghost", fn:restart}
     ]);
   }
   function deployStack(){
-    startDeploy({ name:S.deployName, namespace:S.namespace, mode:S.mode, services:S.services });
+    startDeploy({ name:S.deployName, namespace:(S.cfg&&S.cfg.namespace)||S.namespace, mode:S.mode, services:S.services });
   }
 
   function restart(){ me("Start over"); S={mode:"manual",namespace:"default",containerized:null,image:"",desc:"",cfg:null,missing:[],services:null,name:"",port:0,deployName:"",curStage:null,detailNodes:{}}; askContainerized(); }
