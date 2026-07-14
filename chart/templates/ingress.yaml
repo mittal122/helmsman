@@ -16,11 +16,20 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          {{- range .Values.ingressRoutes }}
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .service }}
+                port:
+                  number: {{ .port }}
+          {{- end }}
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ .Values.name }}
+                name: {{ $.Values.name }}
                 port:
-                  number: {{ .Values.port }}
+                  number: {{ $.Values.port }}
 {{- end }}

@@ -99,6 +99,13 @@ def build_values(cfg: dict) -> dict:
     if cfg.get("uses_websockets"):
         values["websockets"] = True
 
+    # browser→backend path routing: route e.g. /api -> the backend on THIS service's ingress, so
+    # the frontend and backend share one public origin (a browser can't use cluster DNS).
+    if cfg.get("ingress_routes"):
+        values["ingressRoutes"] = [{"path": str(r["path"]), "service": str(r["service"]),
+                                    "port": int(r["port"])} for r in cfg["ingress_routes"]]
+        values["ingress"]["enabled"] = bool(cfg.get("ingress_host"))
+
     # ServiceAccount + namespaced RBAC (only when requested — default keeps renders identical).
     sa = cfg.get("service_account") or cfg.get("serviceAccount") or {}
     if sa:

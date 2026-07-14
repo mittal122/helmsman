@@ -35,6 +35,7 @@ secrets: {}
 ingress:
   enabled: false
   host: ""
+ingressRoutes: []   # browser→backend path routing on this service's ingress: [{path,service,port}]
 hpa:
   enabled: false
   minReplicas: 2

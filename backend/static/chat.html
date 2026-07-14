@@ -233,6 +233,11 @@
         eb.bubble.appendChild(el("div","hint","Fix these in the JSON (or ask your app's AI to), then paste the corrected manifest."));
         return buttons([{label:"Paste corrected manifest →", fn:askPaste},{label:"Start over", cls:"ghost", fn:restart}]);
       }
+      // browser↔backend wiring that can't be auto-fixed -> a healing prompt for the app's AI.
+      if(x.d.healing_prompt){
+        var hb=bot("Heads up — your frontend calls the backend from the browser, and I can't fully wire that at deploy (the browser can't use cluster service names). Copy this to the AI that built your app to fix it, then paste the corrected manifest:",{cls:"warn",promptText:x.d.healing_prompt});
+        return buttons([{label:"I fixed it — paste corrected manifest →", fn:askPaste},{label:"Deploy anyway", cls:"ghost", fn:function(){ askNextMissing(); }},{label:"Start over", cls:"ghost", fn:restart}]);
+      }
       // CHANGE 5: prefill missing port/user/volumes from the images before asking the human.
       var canInspect=(S.missing||[]).some(function(m){return /port|volume|run_as_user/.test(m.field);})
                      && (S.services||[]).some(function(s){return s.image;});

@@ -10,7 +10,7 @@ import main
 def test_build_prompt_is_deterministic_and_self_contained():
     p = intake.build_prompt()
     assert '"services"' in p and "Return ONE strict JSON" in p
-    assert "connects_to" in p and "smoke_tests" in p and "HOSTNAME CONTRACTS" in p
+    assert "connects_to" in p and "smoke_tests" in p and "CONNECTION WIRING" in p
     # same input -> same prompt (no LLM, no randomness)
     assert p == intake.build_prompt()
 
@@ -146,6 +146,40 @@ def test_c2_app_inherits_db_password():
     be2 = next(s for s in r2["cfg"]["services"] if s["name"] == "backend")
     assert be2["secrets"]["DB_PASSWORD"] == "different"             # not overwritten
     assert any("differs from the database's password" in w for w in r2["warnings"])
+
+
+def test_browser_backend_wiring_and_ingress_routes():
+    # browser→backend: route /api to the backend on the frontend's ingress + inject a relative base
+    r = intake.ingest(json.dumps({"application": {"name": "shop"}, "services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True,
+         "ingress": {"host": "shop.example.com"},
+         "connects_to": [{"service": "api", "from": "browser", "path_prefix": "/api", "port": 8000,
+                          "browser_base": {"env": "VITE_API_URL", "baked_at_build": False}}]},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    web = next(s for s in r["cfg"]["services"] if s["name"] == "web")
+    assert web["ingress_routes"] == [{"path": "/api", "service": "api", "port": 8000}]
+    assert web["env"]["VITE_API_URL"] == "/api" and r["healing_prompt"] == ""
+    # the chart renders /api -> api and / -> web on the same ingress
+    from tools import manifests
+    y = manifests.render({**web, "namespace": "default", "stack": "shop"})
+    assert "path: /api" in y and "name: api" in y and "kind: Ingress" in y
+
+def test_browser_baked_base_triggers_healing_prompt():
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True,
+         "connects_to": [{"service": "api", "from": "browser", "path_prefix": "/api",
+                          "browser_base": {"env": "REACT_APP_API", "baked_at_build": True}}]},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    assert "baked into the build" in r["healing_prompt"] and "/api" in r["healing_prompt"]
+
+def test_server_side_connection_uses_service_name_not_healed():
+    # a server-side (backend->db) connection is NOT a browser problem -> no healing, no route
+    r = intake.ingest(json.dumps({"services": [
+        {"name": "api", "image": "org/api:1", "port": 8000,
+         "connects_to": [{"service": "db", "hostname_in_code": "db", "port": 5432, "from": "server"}]},
+        {"name": "db", "image": "postgres:16", "port": 5432, "secrets": {"POSTGRES_PASSWORD": "x"}}]}))
+    api = next(s for s in r["cfg"]["services"] if s["name"] == "api")
+    assert "ingress_routes" not in api and r["healing_prompt"] == ""
 
 
 def test_change2_validation_rich_schema():

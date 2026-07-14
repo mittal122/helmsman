@@ -56,7 +56,10 @@ _SCHEMA_EXAMPLE = """{
       "env": { "KEY": { "value": "", "required_to_boot": false } },
       "secrets": { "KEY": { "value": null, "required_to_boot": true } },
       "connects_to": [
-        { "service": "", "hostname_in_code": "", "port": 0, "protocol": "" }
+        { "service": "", "hostname_in_code": "", "port": 0, "protocol": "",
+          "from": "server | browser",
+          "path_prefix": "",
+          "browser_base": { "env": "", "value": "", "baked_at_build": false } }
       ],
       "database_init": { "strategy": "on_startup | init_job | none", "command": [] },
       "command": [],
@@ -95,10 +98,24 @@ while filling it:
    cron jobs). Do not invent components.
 2. IMAGES: version-pinned tags only, never ":latest". (Or omit "image" and give a "build" spec
    with the git_repo so the bot builds it from source.)
-3. HOSTNAME CONTRACTS (critical): for every connection one container makes to another, report it
-   in "connects_to" with the EXACT hostname string used inside the code/config (e.g. an nginx
-   proxy_pass host, a DB URL host). The bot names Kubernetes Services to match these hostnames —
-   a mismatch produces a running-but-broken app.
+3. CONNECTION WIRING (the most common running-but-broken cause): for EVERY connection one part
+   of the app makes to another, add a "connects_to" entry, and state where the call ORIGINATES:
+   - "from": "server"  — one container calls another INSIDE the cluster (backend→database,
+     worker→queue, server-side rendering). Report the EXACT hostname string used in the
+     code/config as "hostname_in_code" (e.g. a DB URL host, an nginx proxy_pass host). The bot
+     names the Kubernetes Service to match, so cluster DNS resolves it.
+   - "from": "browser" — code running in the USER'S BROWSER calls a backend (a frontend's
+     fetch/axios/XHR to an API). CRITICAL: the browser CANNOT resolve Kubernetes service names or
+     "localhost" — it can only reach the app through its public URL. So a browser→backend call
+     MUST use a SAME-ORIGIN RELATIVE path (e.g. "/api"), not an absolute URL and not a service
+     name. For each browser connection report "path_prefix" (the path the frontend calls, e.g.
+     "/api") and "browser_base": the env var / config key the frontend reads for its API base,
+     its current value, and whether that value is BAKED AT BUILD TIME (compiled into the JS
+     bundle — it CANNOT be changed at deploy) or read at RUNTIME.
+   If the frontend currently hardcodes an absolute URL, "localhost", or a cluster service name
+   for a BROWSER call, FIX the frontend to call a same-origin relative path (e.g. "/api") that is
+   runtime-configurable, and report the "path_prefix". The bot will route that path to the
+   backend via one ingress, so frontend and backend share one origin (no CORS, no broken host).
 4. SECRETS: passwords, tokens, API keys, and any URL embedding a password go under "secrets",
    never "env". A database and every consumer of it must share the same password value. Passwords
    you generate must be URL-safe (letters/digits only). For each env var, set "required_to_boot"
@@ -582,6 +599,53 @@ def validate_manifest(services: list, smoke_tests: list, warns: list) -> dict:
     return {"errors": errors, "questions": questions}
 
 
+def _wire_browser_routes(services: list, warns: list) -> list:
+    """CONNECTION WIRING — a browser→backend call can't use a cluster service name (the browser
+    can't resolve it). Route the frontend's path prefix (e.g. /api) to the backend on ONE ingress
+    (same origin), and inject that relative base into the frontend at runtime when possible.
+    Returns a list of 'healing' notes for connections that can't be auto-fixed (baked-at-build)."""
+    by_name = {s["name"]: s for s in services}
+    heal = []
+    for s in services:
+        routes = []
+        for c in (s.get("connects_to") or []):
+            if str(c.get("from", "")).lower() != "browser":
+                continue
+            tgt = str(c.get("service") or c.get("hostname_in_code") or "").strip()
+            target = by_name.get(tgt)
+            prefix = "/" + (str(c.get("path_prefix") or "/api").strip().lstrip("/"))
+            port = _int_or_none(c.get("port")) or (target.get("port") if target else 8080)
+            if not target:
+                warns.append(f"{s['name']}: browser call to '{tgt}' — no such service to route to.")
+                continue
+            routes.append({"path": prefix, "service": tgt, "port": port})
+            bb = c.get("browser_base") if isinstance(c.get("browser_base"), dict) else {}
+            envk = str(bb.get("env") or "").strip()
+            if envk and not bb.get("baked_at_build"):
+                s.setdefault("env", {})[envk] = prefix   # frontend calls the same-origin relative path
+                warns.append(f"{s['name']}: set {envk}={prefix} (same-origin) so the browser reaches "
+                             f"'{tgt}' through the ingress.")
+            elif bb.get("baked_at_build"):
+                heal.append({"service": s["name"], "target": tgt, "path_prefix": prefix,
+                             "problem": "the frontend's API base is baked into the build — it can't be "
+                                        "changed at deploy; it must be rebuilt to call " + prefix})
+            else:
+                # no runtime env to inject: we can route the path, but can't guarantee the frontend
+                # calls it — the code must use the relative prefix. Flag for the healing prompt.
+                heal.append({"service": s["name"], "target": tgt, "path_prefix": prefix,
+                             "problem": "no runtime-configurable API base was reported, so I can't "
+                                        "point the frontend at " + prefix + " automatically — the "
+                                        "frontend code must call that relative path itself"})
+        if routes:
+            s["ingress_routes"] = routes
+            if not s.get("ingress_host"):
+                warns.append(f"{s['name']}: to route {', '.join(r['path'] for r in routes)} to the "
+                             f"backend from the browser, this service needs an ingress host. On a local "
+                             f"cluster without an ingress controller the frontend must proxy those paths "
+                             f"itself (see the healing prompt).")
+    return heal
+
+
 def ingest(json_text: str, defaults: dict | None = None) -> dict:
     """Parse the dev-AI's returned JSON -> {cfg, missing, summary, warnings}. cfg is ready for
     /deploy (services[] path). `missing` non-empty means DON'T deploy yet — ask the user only
@@ -626,8 +690,9 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
     if not services:
         raise ValueError("no usable services in the JSON")
 
-    _rewire_cross_service(services, warns)   # C1: localhost -> target service name
+    _rewire_cross_service(services, warns)   # C1: localhost -> target service name (server-side)
     _share_db_password(services, warns)      # C2: app inherits the database's password
+    heal = _wire_browser_routes(services, warns)   # browser→backend: ingress path routing + base
 
     smoke_tests = [t for t in (doc.get("smoke_tests") or []) if isinstance(t, dict)]
     val = validate_manifest(services, smoke_tests, warns)   # CHANGE 2: intake validation
@@ -639,7 +704,39 @@ def ingest(json_text: str, defaults: dict | None = None) -> dict:
            "services": services, "warnings": warns, "smoke_tests": smoke_tests}
     return {"cfg": cfg, "missing": missing, "errors": val["errors"], "warnings": warns,
             "smoke_tests": smoke_tests,
+            "healing_prompt": build_healing_prompt(heal) if heal else "",
             "summary": _summary(app_name, ns, services, secrets_n, vols_n)}
+
+
+def build_healing_prompt(heal: list) -> str:
+    """A copy-paste prompt for the app's AI to FIX a frontend that can't reach its backend from the
+    browser (e.g. an API base baked into the build). It explains the constraint and the fix, and
+    asks the AI to change the code and return the corrected manifest."""
+    L = []
+    L.append("The deployment bot found a wiring problem it cannot fix at deploy time — your "
+             "frontend calls its backend from the BROWSER, but the way the URL is configured won't "
+             "work once deployed. Fix it in the code and return the corrected deployment JSON.")
+    L.append("")
+    L.append("## Why (Kubernetes networking)")
+    L.append("- Code running in the browser CANNOT resolve Kubernetes service names (e.g. "
+             "\"backend\") or \"localhost\" — those only work server-to-server inside the cluster.")
+    L.append("- The frontend must reach the backend through a SAME-ORIGIN relative path (e.g. "
+             "\"/api\") that the bot routes to the backend via one ingress. No absolute URL, no "
+             "service name, no localhost, in browser code.")
+    L.append("")
+    L.append("## What to change")
+    for h in heal:
+        L.append(f"- Service \"{h['service']}\" calls \"{h['target']}\": {h['problem']}")
+        L.append(f"  Make the frontend call the relative path \"{h['path_prefix']}\" and, if the API "
+                 f"base is baked at build time, either read it at RUNTIME (from window/config or an "
+                 f"env injected into a small config.js) or rebuild the image with the base set to "
+                 f"\"{h['path_prefix']}\". Report the value you used.")
+    L.append("")
+    L.append("## Then")
+    L.append("Return the SAME deployment JSON as before, corrected: each browser connection's "
+             "\"browser_base\" should be a relative path and \"baked_at_build\": false (or provide "
+             "a \"build\" spec so the bot rebuilds it with the right base).")
+    return "\n".join(L)
 
 
 def validate_services(services: list) -> list:
@@ -681,7 +778,25 @@ def validate_services(services: list) -> list:
 if __name__ == "__main__":
     prompt = build_prompt()
     assert "connects_to" in prompt and "smoke_tests" in prompt and "Return ONE strict JSON" in prompt
-    assert "HOSTNAME CONTRACTS" in prompt and "required_to_boot" in prompt and "Helmsman" in prompt
+    assert "CONNECTION WIRING" in prompt and "required_to_boot" in prompt and "Helmsman" in prompt
+    assert "from\": \"server | browser" in prompt and "browser_base" in prompt
+
+    # browser→backend wiring: /api routed to the backend, relative base injected, no healing needed
+    bw = ingest(json.dumps({"application": {"name": "shop"}, "services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True, "ingress": {"host": "shop.example.com"},
+         "connects_to": [{"service": "api", "from": "browser", "path_prefix": "/api", "port": 8000,
+                          "browser_base": {"env": "VITE_API_URL", "baked_at_build": False}}]},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    web_b = next(s for s in bw["cfg"]["services"] if s["name"] == "web")
+    assert web_b["ingress_routes"] == [{"path": "/api", "service": "api", "port": 8000}]
+    assert web_b["env"]["VITE_API_URL"] == "/api" and bw["healing_prompt"] == ""
+    # baked-at-build -> a healing prompt is produced (can't fix at deploy)
+    bk = ingest(json.dumps({"services": [
+        {"name": "web", "image": "org/web:1", "port": 80, "published": True,
+         "connects_to": [{"service": "api", "from": "browser", "path_prefix": "/api",
+                          "browser_base": {"env": "REACT_APP_API", "baked_at_build": True}}]},
+        {"name": "api", "image": "org/api:1", "port": 8000}]}))
+    assert "baked into the build" in bk["healing_prompt"]
     cprompt = build_prompt({"containerize": True})
     assert "containerize the app if it isn't already" in cprompt and "connects_to" in cprompt
     assert "containerize the app" not in build_prompt()
