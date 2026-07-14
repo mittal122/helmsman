@@ -2,7 +2,7 @@ import asyncio
 import os
 import traceback
 from events import Event, EventBus
-from tools import manifests, validate, deploy, monitor, rollback, scan, cost, portforward, builder
+from tools import manifests, validate, deploy, monitor, rollback, scan, cost, portforward, builder, gateway
 import remediation
 import diagnostics
 import kubeconfig_store
@@ -675,15 +675,29 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
                 await guide_crash("Verify", sn)
             return
 
-        # Port-forward each browser-facing service; emit an endpoint per forward
+        # Port-forward each browser-facing service; emit an endpoint per forward. A frontend that
+        # makes BROWSER calls to a backend (ingress_routes) gets a same-origin reverse-proxy
+        # GATEWAY (works with no ingress controller) so /api reaches the backend — then we forward
+        # the gateway, not the frontend. This is the universal browser↔backend fix.
         endpoints = {}
         for svc in services:
             if not svc.get("published"):
                 continue
             sn, sport = svc["name"], int(svc["port"])
-            ep = await asyncio.to_thread(deploy.get_endpoint, sn, ns, sport)
+            routes = svc.get("ingress_routes")
+            fwd_name, fwd_port, via = sn, sport, "svc/" + sn
+            if routes:
+                try:
+                    gw = await asyncio.to_thread(gateway.deploy_gateway, stack, ns, sn, sport, routes)
+                    fwd_name, fwd_port, via = gw, 80, "svc/" + gw
+                    await emit("info", "Verify",
+                               f"Wired {sn} through a same-origin gateway ("
+                               + ", ".join(f"{r['path']}→{r['service']}" for r in routes) + ").")
+                except Exception as e:
+                    await emit("info", "Verify", f"Gateway setup failed ({e}); serving {sn} directly.")
+            ep = await asyncio.to_thread(deploy.get_endpoint, fwd_name, ns, fwd_port)
             try:
-                lport = await asyncio.to_thread(portforward.start, sn, ns, f"svc/{sn}", sport)
+                lport = await asyncio.to_thread(portforward.start, fwd_name, ns, via, fwd_port)
                 ep["url"] = f"http://127.0.0.1:{lport}"
                 endpoints[sn] = ep["url"]
                 status = await asyncio.to_thread(deploy.probe_url, ep["url"])   # V4

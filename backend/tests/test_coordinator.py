@@ -12,6 +12,7 @@ def _fast_externals(monkeypatch):
     # stub both so unit tests don't do real I/O (probe retries) or hit the LLM.
     monkeypatch.setattr(coordinator.deploy, "probe_url", lambda *a, **k: 200)
     monkeypatch.setattr(coordinator.stack_reviewer, "review", lambda *a, **k: {"findings": []})
+    monkeypatch.setattr(coordinator.gateway, "deploy_gateway", lambda *a, **k: (a[0] + "-gateway"))
 
 @pytest.mark.asyncio
 async def test_happy_path_emits_stages_and_endpoint(monkeypatch):
