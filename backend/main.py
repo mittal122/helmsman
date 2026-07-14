@@ -508,6 +508,18 @@ async def _cluster(fn, *args):
 async def namespaces():
     return {"namespaces": await _cluster(cluster.list_namespaces)}
 
+@app.delete("/namespaces/{ns}", dependencies=_RA)
+async def namespace_delete(ns: str, confirm: str = ""):
+    # DESTRUCTIVE: deletes the whole namespace and EVERYTHING in it. Admin-only, human-gated
+    # (never autonomous), two-step: the client must echo the exact namespace name.
+    if confirm != ns:
+        raise HTTPException(status_code=400,
+                            detail="confirmation required: pass ?confirm=<namespace name>")
+    r = await _cluster(cluster.delete_namespace, ns)
+    await store.append_audit(auth.actor(), "delete_namespace", ns, True,
+                             "deleted the namespace and everything in it")
+    return r
+
 @app.get("/namespaces/{ns}/workloads", dependencies=_RV)
 async def workloads(ns: str):
     return {"workloads": await _cluster(cluster.list_workloads, ns)}

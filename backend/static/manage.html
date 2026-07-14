@@ -119,6 +119,7 @@
     <span><label>Namespace</label>
       <select id="ns"></select></span>
     <button class="btn" id="refresh-ns">↻ namespaces</button>
+    <button class="btn danger" id="del-ns-btn" title="Delete this namespace and everything in it">🗑 delete namespace</button>
     <button class="btn" id="refresh-wl">↻ workloads</button>
     <span class="spacer"></span>
     <span class="conn" id="autoref"><span class="d"></span><span>auto-refresh 5s</span></span>
@@ -162,6 +163,13 @@
   <p>Type the workload name <code id="del-echo"></code> to confirm:</p>
   <input id="del-input" placeholder="workload name">
   <div class="row"><button class="btn" id="del-cancel">Cancel</button><button class="btn danger" id="del-go" disabled>Delete permanently</button></div>
+</div></div>
+<div class="modal" id="nsmodal"><div class="box">
+  <h3>⚠ Delete ENTIRE namespace</h3>
+  <p>This permanently deletes namespace <code id="delns-name"></code> and <b>everything inside it</b> — every app, service, secret, config, volume and Helm release. This cannot be undone.</p>
+  <p>Type the namespace name <code id="delns-echo"></code> to confirm:</p>
+  <input id="delns-input" placeholder="namespace name">
+  <div class="row"><button class="btn" id="delns-cancel">Cancel</button><button class="btn danger" id="delns-go" disabled>Delete the whole namespace</button></div>
 </div></div>
 
 <script>
@@ -409,6 +417,23 @@
       toast("deleted "+curName+" ("+(d.method||"")+")");curName="";if(timer)clearInterval(timer);
       $("detail").textContent="";$("detail").appendChild(el("div","empty","workload deleted"));await loadWorkloads();
     }catch(e){toast("delete: "+e.message,true);}
+  };
+
+  // delete namespace — 2-step (echo the exact namespace name). Deletes EVERYTHING inside.
+  $("del-ns-btn").onclick=function(){
+    if(!curNs){toast("pick a namespace first",true);return;}
+    $("delns-name").textContent=curNs;$("delns-echo").textContent=curNs;
+    $("delns-input").value="";$("delns-go").disabled=true;$("nsmodal").classList.add("on");$("delns-input").focus();
+  };
+  $("delns-input").addEventListener("input",function(){$("delns-go").disabled=$("delns-input").value!==curNs;});
+  $("delns-cancel").onclick=function(){$("nsmodal").classList.remove("on");};
+  $("delns-go").onclick=async function(){
+    $("nsmodal").classList.remove("on");var ns=curNs;
+    try{var d=await api("DELETE","/namespaces/"+encodeURIComponent(ns)+"?confirm="+encodeURIComponent(ns));
+      toast("deleted namespace "+ns);curName="";
+      $("detail").textContent="";$("detail").appendChild(el("div","empty","namespace deleted"));
+      await loadNamespaces();await loadWorkloads();
+    }catch(e){toast("delete namespace: "+e.message,true);}
   };
 
   $("ns").onchange=function(){curName="";loadWorkloads();};

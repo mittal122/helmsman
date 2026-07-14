@@ -265,6 +265,21 @@ def _helm_release_exists(namespace: str, name: str) -> bool:
                        capture_output=True, text=True, timeout=TIMEOUT_S)
     return r.returncode == 0
 
+_PROTECTED_NS = {"kube-system", "kube-public", "kube-node-lease", "default", "kube-flannel", "local-path-storage"}
+
+def delete_namespace(namespace: str) -> dict:
+    """Delete an ENTIRE namespace — every workload, Service, Secret, ConfigMap, PVC and Helm
+    release inside it goes with it. Refuses cluster/system namespaces. Caller enforces the
+    two-step name confirmation + admin role."""
+    _valid(namespace)
+    if namespace in _PROTECTED_NS:
+        raise ValueError(f"refusing to delete protected namespace '{namespace}'")
+    r = subprocess.run(["kubectl", "delete", "namespace", namespace, "--wait", "--timeout", "120s"],
+                       capture_output=True, text=True, timeout=150)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip())
+    return {"ok": True, "method": "kubectl delete namespace", "namespace": namespace}
+
 def delete_app(namespace: str, name: str) -> dict:
     """Delete a workload. Prefers `helm uninstall` for a clean, complete removal of a
     Helm-managed release; otherwise deletes the Deployment + the Services routing to

@@ -281,3 +281,27 @@ def test_delete_kubeconfig_rejects_bad_name(monkeypatch):
     r = client.delete("/kubeconfigs/Bad_Name")   # uppercase/underscore fails RFC1123, stays a single path segment
     assert r.status_code == 400
     assert called["n"] is False
+
+def test_namespace_delete_requires_confirm_and_admin(monkeypatch):
+    from fastapi.testclient import TestClient
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    called = {}
+    monkeypatch.setattr(main.cluster, "delete_namespace",
+                        lambda ns: called.setdefault("ns", ns) or {"ok": True, "namespace": ns})
+    with TestClient(main.app) as c:  # open-dev mode -> admin
+        # no confirm -> 400, and delete_namespace is NOT called
+        r = c.delete("/namespaces/demo")
+        assert r.status_code == 400 and "confirm" in r.json()["detail"]
+        assert "ns" not in called
+        # confirm matches -> deletes
+        r2 = c.delete("/namespaces/demo?confirm=demo")
+        assert r2.status_code == 200 and called["ns"] == "demo"
+
+def test_namespace_delete_refuses_protected():
+    from tools import cluster
+    for ns in ("kube-system", "default", "kube-public"):
+        try:
+            cluster.delete_namespace(ns)
+            assert False, f"should refuse {ns}"
+        except ValueError as e:
+            assert "protected" in str(e)
