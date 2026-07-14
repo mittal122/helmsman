@@ -9,7 +9,8 @@
 # checked-and-guided instead of auto-installed.
 #
 #   ./run.sh                 check+install deps, bring up kind, serve on :8000
-#   PORT=9000 ./run.sh       different port
+#                            (if :8000 is busy it moves up to the next free port automatically)
+#   PORT=9000 ./run.sh       different starting port
 #   SKIP_CLUSTER=1 ./run.sh  reuse an existing cluster/kubeconfig (no kind)
 #   SKIP_METRICS=1 ./run.sh  don't install metrics-server
 set -euo pipefail
@@ -130,24 +131,29 @@ else say "Installing metrics-server"; scripts/monitoring-up.sh || warn "metrics-
 export ALLOW_OPEN_DEV="${ALLOW_OPEN_DEV:-1}"
 export COOKIE_INSECURE="${COOKIE_INSECURE:-1}"
 
-# never fail on "port in use": if $PORT is busy, fall back to a free one the OS picks.
-# (bind the wanted port to test it; on failure ask the OS for any free port with :0.)
+# never fail on "port in use": if $PORT is busy, scan UPWARD (8000 -> 8001 -> 8002 …) for the
+# next free port and use that — predictable, not a random high port. Last resort: any OS-free port.
 FREEPORT="$(python - "$PORT" <<'PY'
 import socket, sys
 want = int(sys.argv[1])
 def free(p):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(("127.0.0.1", p)); return s.getsockname()[1]
+        s.bind(("127.0.0.1", p)); return True          # nobody is using this port
     except OSError:
-        return None
+        return False                                    # in use -> try the next one
     finally:
         s.close()
-print(free(want) or free(0))
+def pick(start):
+    for p in range(start, min(start + 200, 65536)):
+        if free(p):
+            return p
+    s = socket.socket(); s.bind(("127.0.0.1", 0))        # give up scanning -> any OS-free port
+    p = s.getsockname()[1]; s.close(); return p
+print(pick(want))
 PY
 )"
-[ "$FREEPORT" = "$PORT" ] || warn "port $PORT busy — using $FREEPORT instead"
+[ "$FREEPORT" = "$PORT" ] || warn "port $PORT is busy — moved up to the next free port $FREEPORT"
 PORT="$FREEPORT"
 say "Backend live at http://localhost:${PORT}   (Ctrl-C to stop)"
 cd backend
