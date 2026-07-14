@@ -101,6 +101,19 @@
   var S={ mode:"manual", namespace:"default", containerized:null, image:"", desc:"",
           cfg:null, missing:[], services:null, name:"", port:0, deployName:"", curStage:null, detailNodes:{} };
 
+  // ---------- keep the server's port-forwards alive from the chat ----------
+  var fwdKeys=[], hbTimer=null;
+  function startHeartbeat(){
+    if(hbTimer) return;
+    hbTimer=setInterval(function(){
+      if(!fwdKeys.length) return;
+      fetch("/forwards/heartbeat",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:fwdKeys})}).catch(function(){});
+    },10000);
+  }
+  window.addEventListener("pagehide",function(){
+    if(fwdKeys.length){ try{ fetch("/forwards/stop",{method:"POST",headers:authHeaders(),body:JSON.stringify({keys:fwdKeys}),keepalive:true}); }catch(_){} }
+  });
+
   // ---------- token / theme ----------
   var tokenEl=$("token");
   try{ tokenEl.value=localStorage.getItem("helmsman_token")||""; }catch(e){}
@@ -113,7 +126,10 @@
 
   // ---------- element helpers (textContent only — never innerHTML for dynamic/cluster data) ----------
   function el(t,c,txt){ var n=document.createElement(t); if(c)n.className=c; if(txt!=null)n.textContent=txt; return n; }
-  function scroll(){ thread.scrollTop=thread.scrollHeight; }
+  // auto-scroll: follow new content unless the user has scrolled up to read history.
+  var stick=true;
+  thread.addEventListener("scroll",function(){ stick=(thread.scrollHeight-thread.scrollTop-thread.clientHeight)<80; });
+  function scroll(){ if(stick){ requestAnimationFrame(function(){ thread.scrollTop=thread.scrollHeight; }); } }
 
   // add a bot message. opts: {info, cls, details(bool), promptText, cls}
   function bot(text, opts){
@@ -128,8 +144,9 @@
     if(opts.promptText){ b.appendChild(promptBox(opts.promptText)); }
     var detailsNode=null;
     if(opts.details){
-      var tog=el("div","detbtn","▸ show what I ran"); var det=el("div","details");
-      tog.onclick=function(){ det.classList.toggle("on"); tog.textContent=(det.classList.contains("on")?"▾ hide details":"▸ show what I ran"); scroll(); };
+      // commands are shown BY DEFAULT (open) — no click needed. Toggle can still hide them.
+      var det=el("div","details on"); var tog=el("div","detbtn","▾ hide what I ran");
+      tog.onclick=function(){ det.classList.toggle("on"); tog.textContent=(det.classList.contains("on")?"▾ hide what I ran":"▸ show what I ran"); scroll(); };
       b.appendChild(tog); b.appendChild(det); detailsNode=det;
     }
     row.appendChild(b); thread.appendChild(row); scroll();
@@ -382,7 +399,13 @@
     else if(t==="endpoint"){
       var d=ev.data||{}; var r=bot((d.service_name?d.service_name+" is live! ":"✅ It's live! ")+"Open your app:",{cls:"good"});
       var wrap=el("div","endpoint");
-      if(d.url && /^https?:\/\//i.test(d.url)){ var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; wrap.appendChild(a); }
+      if(d.url && /^https?:\/\//i.test(d.url)){
+        var a=el("a",null,d.url); a.href=d.url; a.target="_blank"; a.rel="noopener"; wrap.appendChild(a);
+        // keep the server's port-forward alive from the chat (else the reaper kills it in ~30s
+        // and the URL stops working). Track the real forward key + start the heartbeat.
+        if(d.fwd_key && fwdKeys.indexOf(d.fwd_key)<0){ fwdKeys.push(d.fwd_key); startHeartbeat(); }
+        wrap.appendChild(el("div","epnote","I'm keeping this link alive while this tab is open — just click it."));
+      }
       else{ wrap.appendChild(el("span",null, d.service?(d.service+":"+d.port):(ev.message||"available via port-forward"))); }
       r.bubble.appendChild(wrap);
     }

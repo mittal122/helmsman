@@ -707,6 +707,7 @@ async def _run_compose(cfg: dict, bus: EventBus, approvals: Approvals,
             except Exception:
                 pass
             ep["service_name"] = sn
+            ep["fwd_key"] = fwd_name   # the actual port-forward key (the gateway, when there is one)
             await emit("endpoint", "Verify", f"{sn} is live", ep)
 
         # CHANGE 4 — SUCCESS = the user's paths work, not just "pods Running". Run the app-author's
